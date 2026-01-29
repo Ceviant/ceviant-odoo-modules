@@ -1,10 +1,13 @@
 {
-    'name': 'Ledger Sync',
+    'name': 'Odoo-Mifos Ledger Sync',
     'version': '2.0.0',
     'category': 'Accounting',
-    'summary': 'For handling ledger transactions',
-    'description': 'This module provides a custom API endpoint for handling ledger transactions.',
-    'author': 'Turog',
+    'summary': 'A robust, asynchronous ledger synchronization system that seamlessly integrates Mifos financial data with Odoo\'s accounting module using RabbitMQ message queues.',
+    'description': 'The Odoo-Mifos Ledger Sync module provides a comprehensive API for handling ledger transactions and account management between Mifos (a microfinance management platform) and Odoo (an ERP system). The system uses asynchronous message queuing to ensure reliable, scalable processing of financial transactions with built-in retry logic, double-entry accounting, and complete audit trails.',
+    'author': 'Ceviant',
+    'license': 'LGPL-3',
+    'website': 'https://www.ceviant.co',
+    'icon': 'https://www.ceviant.co/favicon/apple-touch-icon.png',
     'depends': ['account', 'custom_journal_entry'],
     'data': [
         'security/ir.model.access.csv',
@@ -13,4 +16,5 @@
     ],
     'installable': True,
     'application': False,
+    'auto_install': False,
 }
