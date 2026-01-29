@@ -5,7 +5,7 @@
     'summary': 'For handling ledger transactions',
     'description': 'This module provides a custom API endpoint for handling ledger transactions.',
     'author': 'Turog',
-    'depends': ['account'],
+    'depends': ['account', 'custom_journal_entry'],
     'data': [
         'security/ir.model.access.csv',
         'views/custom_journal_entry_views.xml',
