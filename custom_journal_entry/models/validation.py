@@ -53,7 +53,7 @@ account_entry_schema = {
         "status": {"type": "string"},
         "account_code": {"type": "string"}
     },
-    "required": ["account_id", "account_code", "account_name", "currency", "account_type"]
+    "required": ["account_id", "account_code", "account_name", "account_type"]
 }
 
 
