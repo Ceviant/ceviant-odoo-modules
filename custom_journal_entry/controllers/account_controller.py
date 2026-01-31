@@ -40,6 +40,10 @@ class AccountEntryController(http.Controller):
                 content_type='application/json'
             )
 
+        # Set default currency if not provided
+        if 'currency' not in payload:
+            payload['currency'] = 'NGN'
+        
         try:
             batch_ref, error = create_account(payload)
             if error:

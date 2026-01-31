@@ -1,11 +1,12 @@
 import logging
-import json
-from odoo.http import request, Response
+from odoo.http import request
 from .validation import validate_account_entry, get_currency_id
 from .rabbitmq_publisher import generate_batch_reference
 
 _logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
+
+# Global cache for valid account types (performance optimization)
+_valid_account_types_cache = None
 
 # Account type mapping for common user inputs to Odoo account types
 ACCOUNT_TYPE_MAPPING = {
@@ -27,60 +28,59 @@ ACCOUNT_TYPE_MAPPING = {
 }
 
 def map_account_type(account_type):
-    """
-    Map common account type names to Odoo's specific account type codes.
-    If the account type is already in Odoo format, return it as-is.
-    """
+    """Map common account type names to Odoo's specific account type codes."""
     if not account_type:
         return None
     
-    # Check if it's a common name that needs mapping
     mapped_type = ACCOUNT_TYPE_MAPPING.get(account_type.upper())
     if mapped_type:
         _logger.info(f"Mapped account type '{account_type}' to '{mapped_type}'")
         return mapped_type
     
-    # Return as-is if not in mapping (assume it's already in Odoo format)
     return account_type
 
+
+def _get_valid_account_types(env):
+    """Retrieve and cache valid account types from Odoo (performance optimization)."""
+    global _valid_account_types_cache
+    if _valid_account_types_cache is None:
+        accounts = env['account.account'].sudo().search_read([], fields=['account_type'])
+        _valid_account_types_cache = frozenset(
+            record['account_type'] for record in accounts if record['account_type']
+        )
+        _logger.debug(f"Cached {len(_valid_account_types_cache)} account types")
+    return _valid_account_types_cache
+
 def create_account(payload):
+    """Create a new account in Odoo with validation and error handling."""
     env = request.env
     Account = env['account.account']
     CustomAccountEntry = env['custom.account.entry']
 
+    # Validate payload early (fail-fast pattern)
     is_valid, validation_error = validate_account_entry(payload)
     if not is_valid:
         _logger.error(f"Payload validation failed: {validation_error}")
         return None, validation_error
 
-    # Map the account type to Odoo format
+    # Map and validate account type
     account_type_name = map_account_type(payload.get('account_type'))
     if not account_type_name:
-        error_message = "Account type is required"
-        _logger.error(error_message)
-        return None, error_message
+        return None, "Account type is required"
 
-    account_types = Account.sudo().search_read([], fields=['account_type'])
-    valid_account_types = {record['account_type'] for record in account_types if record['account_type']}
-    _logger.info(f"Valid account types retrieved from Odoo: {valid_account_types}")
-
+    valid_account_types = _get_valid_account_types(env)
     if account_type_name not in valid_account_types:
-        error_message = f"Invalid account type '{account_type_name}' provided."
-        _logger.error(error_message)
-        return None, error_message
+        return None, f"Invalid account type '{account_type_name}' provided."
 
+    # Validate currency
     currency_id = get_currency_id(payload['currency'])
     if not currency_id:
-        error_message = "Invalid currency"
-        _logger.error(error_message)
-        return None, error_message
+        return None, "Invalid currency"
 
+    # Check for duplicate account code
     code = payload.get('account_code')
-    existing_account = Account.search([('code', '=', code)], limit=1)
-    if existing_account:
-        error_message = f"Account with code '{code}' already exists."
-        _logger.error(error_message)
-        return None, error_message
+    if Account.search([('code', '=', code)], limit=1):
+        return None, f"Account with code '{code}' already exists."
 
     try:
         new_account = Account.create({
@@ -99,28 +99,38 @@ def create_account(payload):
             'account_code': payload['account_code'],
         })
 
-        _logger.info(f"Account '{payload['account_name']}' created successfully with ID {new_account.id} and custom entry ID {new_custom_account.id}.")
-        return generate_batch_reference(), None
+        batch_ref = generate_batch_reference()
+        _logger.info(f"Account '{payload['account_name']}' created with batch ref: {batch_ref}")
+        return batch_ref, None
 
     except Exception as e:
-        _logger.error(f"Failed to create new account: {str(e)}")
+        _logger.error(f"Account creation error: {str(e)}")
         return None, f"Error creating account: {str(e)}"
 
 def get_account_data(env, accounts):
-    account_data = []
-    for account in accounts:
-        account_data.append({
+    """Convert account records to dictionary format for API response (optimized with list comprehension)."""
+    account_data = [
+        {
             'id': account.id,
             'code': account.code,
             'name': account.name,
-            'account_type': account.account_type if account.account_type else '',
+            'account_type': account.account_type or '',
             'currency_id': account.currency_id.name if account.currency_id else '',
             'reconcile': account.reconcile
-        })
-
-    _logger.info(f"Account data prepared: {account_data}")
+        }
+        for account in accounts
+    ]
+    _logger.debug(f"Prepared {len(account_data)} account records")
     return account_data
 
 
 def get_account_records(env):
+    """Retrieve all account records from Odoo."""
     return env['account.account'].search([])
+
+
+def clear_account_type_cache():
+    """Clear the cached account types (useful for testing or after Odoo updates)."""
+    global _valid_account_types_cache
+    _valid_account_types_cache = None
+    _logger.debug("Account type cache cleared")
