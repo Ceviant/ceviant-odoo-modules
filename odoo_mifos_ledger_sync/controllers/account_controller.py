@@ -15,6 +15,9 @@ class AccountEntryController(http.Controller):
 
         try:
             payload = json.loads(raw_data)
+            # Default currency to NGN if not provided
+            if 'currency' not in payload or not payload['currency']:
+                payload['currency'] = 'NGN'
             _logger.info("Received payload: %s", payload)
         except json.JSONDecodeError as e:
             _logger.error("Invalid JSON payload: %s", e)
