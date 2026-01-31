@@ -1,6 +1,6 @@
 from odoo import http
 from odoo.http import request, Response
-from ..models.validation import validate_account_entry
+from ..models.validation import validate_account_entry, get_available_currencies, get_default_currency
 from ..models.account_utils import get_account_records, get_account_data, create_account
 import logging
 import json
@@ -42,7 +42,7 @@ class AccountEntryController(http.Controller):
 
         # Set default currency if not provided
         if 'currency' not in payload:
-            payload['currency'] = 'NGN'
+            payload['currency'] = get_default_currency()
         
         try:
             batch_ref, error = create_account(payload)

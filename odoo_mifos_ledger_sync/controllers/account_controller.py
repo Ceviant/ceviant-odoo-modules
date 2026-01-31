@@ -1,6 +1,6 @@
 from odoo import http
 from odoo.http import request, Response
-from ..models.validation import validate_account_entry
+from ..models.validation import validate_account_entry, get_available_currencies, get_default_currency
 from ..models.account_utils import get_account_records, get_account_data, create_account
 import logging
 import json
@@ -15,9 +15,9 @@ class AccountEntryController(http.Controller):
 
         try:
             payload = json.loads(raw_data)
-            # Default currency to NGN if not provided
+            # Default currency to Odoo's default currency if not provided
             if 'currency' not in payload or not payload['currency']:
-                payload['currency'] = 'NGN'
+                payload['currency'] = get_default_currency()
             _logger.info("Received payload: %s", payload)
         except json.JSONDecodeError as e:
             _logger.error("Invalid JSON payload: %s", e)
@@ -97,6 +97,35 @@ class AccountEntryController(http.Controller):
                 'code': 200,
                 'status': 'success',
                 'data': account_data
+            }),
+            status=200,
+            content_type='application/json'
+        )
+
+    @http.route('/ledger/currencies', type='http', auth='public', methods=['GET'], csrf=False)
+    def get_supported_currencies(self, **kwargs):
+        _logger.info("Fetching all supported currencies")
+
+        try:
+            currencies = get_available_currencies()
+            _logger.info(f"Found {len(currencies)} currencies")
+        except Exception as error:
+            _logger.error("Error fetching currencies: %s", error)
+            return Response(
+                json.dumps({
+                    'code': 500,
+                    'status': 'error',
+                    'data': {"message": "Failed to retrieve currencies"}
+                }),
+                status=500,
+                content_type='application/json'
+            )
+
+        return Response(
+            json.dumps({
+                'code': 200,
+                'status': 'success',
+                'data': currencies
             }),
             status=200,
             content_type='application/json'
