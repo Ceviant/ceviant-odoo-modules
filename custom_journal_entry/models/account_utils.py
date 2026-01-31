@@ -88,7 +88,7 @@ def create_account(payload):
             'name': payload['account_name'],
             'account_type': account_type_name,
             'currency_id': currency_id,
-            'reconcile': payload['status'].lower() == 'active',
+            'reconcile': payload.get('account_status', '').lower() == 'active',
         })
 
         new_custom_account = CustomAccountEntry.create({
