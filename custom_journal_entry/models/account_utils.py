@@ -7,6 +7,42 @@ from .rabbitmq_publisher import generate_batch_reference
 _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
+# Account type mapping for common user inputs to Odoo account types
+ACCOUNT_TYPE_MAPPING = {
+    'ASSET': 'asset_fixed',
+    'CURRENT_ASSET': 'asset_current',
+    'FIXED_ASSET': 'asset_fixed',
+    'LIABILITY': 'liability_current',
+    'CURRENT_LIABILITY': 'liability_current',
+    'NON_CURRENT_LIABILITY': 'liability_non_current',
+    'PAYABLE': 'liability_payable',
+    'RECEIVABLE': 'asset_receivable',
+    'EQUITY': 'equity',
+    'INCOME': 'income',
+    'EXPENSE': 'expense',
+    'DEPRECIATION': 'expense_depreciation',
+    'PREPAID': 'asset_prepaid',
+    'OTHER_INCOME': 'income_other',
+    'DIRECT_COST': 'expense_direct_cost',
+}
+
+def map_account_type(account_type):
+    """
+    Map common account type names to Odoo's specific account type codes.
+    If the account type is already in Odoo format, return it as-is.
+    """
+    if not account_type:
+        return None
+    
+    # Check if it's a common name that needs mapping
+    mapped_type = ACCOUNT_TYPE_MAPPING.get(account_type.upper())
+    if mapped_type:
+        _logger.info(f"Mapped account type '{account_type}' to '{mapped_type}'")
+        return mapped_type
+    
+    # Return as-is if not in mapping (assume it's already in Odoo format)
+    return account_type
+
 def create_account(payload):
     env = request.env
     Account = env['account.account']
@@ -17,11 +53,17 @@ def create_account(payload):
         _logger.error(f"Payload validation failed: {validation_error}")
         return None, validation_error
 
+    # Map the account type to Odoo format
+    account_type_name = map_account_type(payload.get('account_type'))
+    if not account_type_name:
+        error_message = "Account type is required"
+        _logger.error(error_message)
+        return None, error_message
+
     account_types = Account.sudo().search_read([], fields=['account_type'])
     valid_account_types = {record['account_type'] for record in account_types if record['account_type']}
     _logger.info(f"Valid account types retrieved from Odoo: {valid_account_types}")
 
-    account_type_name = payload.get('account_type')
     if account_type_name not in valid_account_types:
         error_message = f"Invalid account type '{account_type_name}' provided."
         _logger.error(error_message)

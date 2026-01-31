@@ -98,3 +98,36 @@ class AccountEntryController(http.Controller):
             status=200,
             content_type='application/json'
         )
+
+    @http.route('/ledger/account-types', type='http', auth='public', methods=['GET'], csrf=False)
+    def get_supported_account_types(self, **kwargs):
+        _logger.info("Fetching supported account types")
+
+        try:
+            Account = request.env['account.account']
+            # Get all unique account types from existing accounts
+            accounts = Account.sudo().search_read([], fields=['account_type'])
+            valid_account_types = sorted(list(set(record['account_type'] for record in accounts if record['account_type'])))
+            
+            _logger.info(f"Valid account types: {valid_account_types}")
+        except Exception as error:
+            _logger.error("Error fetching account types: %s", error)
+            return Response(
+                json.dumps({
+                    'code': 500,
+                    'status': 'error',
+                    'data': {"message": "Failed to retrieve account types"}
+                }),
+                status=500,
+                content_type='application/json'
+            )
+
+        return Response(
+            json.dumps({
+                'code': 200,
+                'status': 'success',
+                'data': valid_account_types
+            }),
+            status=200,
+            content_type='application/json'
+        )
