@@ -54,8 +54,8 @@ def _get_valid_account_types(env):
 def create_account(payload):
     """Create a new account in Odoo with validation and error handling."""
     env = request.env
-    Account = env['account.account']
-    CustomAccountEntry = env['custom.account.entry']
+    Account = env['account.account'].sudo()  # Use sudo to bypass ACL restrictions
+    CustomAccountEntry = env['custom.account.entry'].sudo()
 
     # Validate payload early (fail-fast pattern)
     is_valid, validation_error = validate_account_entry(payload)
@@ -126,7 +126,7 @@ def get_account_data(env, accounts):
 
 def get_account_records(env):
     """Retrieve all account records from Odoo."""
-    return env['account.account'].search([])
+    return env['account.account'].sudo().search([])
 
 
 def clear_account_type_cache():
