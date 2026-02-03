@@ -69,10 +69,10 @@ def publish_message_to_rabbitmq(queue_name, payload):
     return None
 
 def publish_account_entry_to_rabbitmq(payload):
-    return publish_message_to_rabbitmq('account_queue', payload)
+    return publish_message_to_rabbitmq('odoo_account_queue', payload)
 
 def publish_journal_entry_to_rabbitmq(payload):
-    return publish_message_to_rabbitmq('transaction_queue', payload)
+    return publish_message_to_rabbitmq('odoo_transaction_queue', payload)
 
 def publish_journal_entry_update_to_rabbitmq(payload):
-    return publish_message_to_rabbitmq('update_journal_queue', payload)
+    return publish_message_to_rabbitmq('odoo_update_journal_queue', payload)

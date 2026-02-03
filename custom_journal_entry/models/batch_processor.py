@@ -28,7 +28,7 @@ class BatchProcessor(models.Model):
             payload = message.get('payload')
             queue_type = method.routing_key
 
-            if queue_type == 'transaction_queue':
+            if queue_type == 'odoo_transaction_queue':
                 logging.info(f"Processing transaction for batch {batch_ref} --")
                 success = process_transaction(payload)
                 if success:
@@ -36,14 +36,14 @@ class BatchProcessor(models.Model):
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 else:
                     raise Exception("Transaction processing failed")
-            elif queue_type == 'account_queue':
+            elif queue_type == 'odoo_account_queue':
                 success = create_account(payload)
                 if success:
                     self.send_notification(f"Account batch {batch_ref} processed successfully.")
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 else:
                     raise Exception("Account creation failed")
-            elif queue_type == 'update_journal_queue':
+            elif queue_type == 'odoo_update_journal_queue':
                 logging.info(f"Updating journal entry for batch {batch_ref} --")
                 success = update_journal_entry_in_database(payload)
                 if success:
@@ -71,9 +71,9 @@ class BatchProcessor(models.Model):
             self.process_message(ch, method, None, body, retry_count+1)
         else:
             failure_queue = {
-                'transaction_queue': 'transaction_failure_queue',
-                'account_queue': 'account_failure_queue',
-                'update_journal_queue': 'update_journal_failure_queue'
+                'odoo_transaction_queue': 'odoo_transaction_failure_queue',
+                'odoo_account_queue': 'odoo_account_failure_queue',
+                'odoo_update_journal_queue': 'odoo_update_journal_failure_queue'
             }.get(queue_type)
             if failure_queue:
                 logging.error(f"Max retries reached for batch {json.loads(body).get('batch_ref')}. Moving to {failure_queue}.")
@@ -101,14 +101,14 @@ class BatchProcessor(models.Model):
         )
         connection = pika.BlockingConnection(connection_parameters)
         channel = connection.channel()
-        channel.queue_declare(queue='transaction_queue', durable=True)
-        channel.queue_declare(queue='account_queue', durable=True)
-        channel.queue_declare(queue='update_journal_queue', durable=True)
-        channel.queue_declare(queue='transaction_failure_queue', durable=True)
-        channel.queue_declare(queue='account_failure_queue', durable=True)
-        channel.queue_declare(queue='update_journal_failure_queue', durable=True)
+        channel.queue_declare(queue='odoo_transaction_queue', durable=True)
+        channel.queue_declare(queue='odoo_account_queue', durable=True)
+        channel.queue_declare(queue='odoo_update_journal_queue', durable=True)
+        channel.queue_declare(queue='odoo_transaction_failure_queue', durable=True)
+        channel.queue_declare(queue='odoo_account_failure_queue', durable=True)
+        channel.queue_declare(queue='odoo_update_journal_failure_queue', durable=True)
 
-        for queue_name in ['transaction_queue', 'account_queue', 'update_journal_queue']:
+        for queue_name in ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']:
             method_frame, header_frame, body = channel.basic_get(queue=queue_name)
             while method_frame:
                 self.process_message(channel, method_frame, None, body)

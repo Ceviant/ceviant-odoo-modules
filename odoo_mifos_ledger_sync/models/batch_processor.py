@@ -72,15 +72,15 @@ THREAD_POOL_SIZE = 5  # Process 5 messages in parallel
 
 # Handler mapping for faster lookups
 HANDLER_MAP = {
-    'transaction_queue': ('Processing transaction', process_transaction),
-    'account_queue': ('Creating account', create_account),
-    'update_journal_queue': ('Updating journal', update_journal_entry_in_database),
+    'odoo_transaction_queue': ('Processing transaction', process_transaction),
+    'odoo_account_queue': ('Creating account', create_account),
+    'odoo_update_journal_queue': ('Updating journal', update_journal_entry_in_database),
 }
 
 FAILURE_QUEUE_MAP = {
-    'transaction_queue': 'transaction_failure_queue',
-    'account_queue': 'account_failure_queue',
-    'update_journal_queue': 'update_journal_failure_queue'
+    'odoo_transaction_queue': 'odoo_transaction_failure_queue',
+    'odoo_account_queue': 'odoo_account_failure_queue',
+    'odoo_update_journal_queue': 'odoo_update_journal_failure_queue'
 }
 
 class BatchProcessor(models.Model):
@@ -115,8 +115,8 @@ class BatchProcessor(models.Model):
             cls._channel = cls.get_connection().channel()
             cls._channel.basic_qos(prefetch_count=PREFETCH_COUNT)
             # Declare all queues once
-            for q in ['transaction_queue', 'account_queue', 'update_journal_queue',
-                     'transaction_failure_queue', 'account_failure_queue', 'update_journal_failure_queue']:
+            for q in ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue',
+                     'odoo_transaction_failure_queue', 'odoo_account_failure_queue', 'odoo_update_journal_failure_queue']:
                 cls._channel.queue_declare(queue=q, durable=True)
         return cls._channel
 
@@ -178,7 +178,7 @@ class BatchProcessor(models.Model):
                 # Process in thread pool (non-blocking)
                 executor.submit(self.process_message, ch, method, body, 0)
             
-            for queue_name in ['transaction_queue', 'account_queue', 'update_journal_queue']:
+            for queue_name in ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']:
                 channel.basic_consume(queue=queue_name, on_message_callback=callback)
             
             _logger.info(f"🚀 Consumer ready: prefetch={PREFETCH_COUNT} workers={THREAD_POOL_SIZE} retry_limit={MAX_RETRIES}")
