@@ -1,117 +1,209 @@
 import pika
 import json
 import logging
+import os
 from odoo import models, api
 from .journal_utils import process_transaction, update_journal_entry_in_database
 from .account_utils import create_account
 import time
+from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
-logging.basicConfig(level=logging.DEBUG)
+# Try to import Loki handler, fallback to manual if not available
+try:
+    from loki_handler import LokiHandler
+    LOKI_AVAILABLE = True
+except ImportError:
+    LOKI_AVAILABLE = False
 
-MAX_RETRIES = 5
-RETRY_DELAY = 5
+# Configure logging with file handler and Loki handler
+def setup_logger():
+    """Setup logger with console, file, and Loki handlers."""
+    logger = logging.getLogger('rabbitmq_consumer')
+    logger.setLevel(logging.INFO)  # Changed to INFO (reduced verbosity)
+    
+    # Clear existing handlers
+    logger.handlers.clear()
+    
+    # Create logs directory if it doesn't exist
+    log_dir = '/var/log/odoo' if os.path.exists('/var/log/odoo') or os.access('/var/log', os.W_OK) else '/tmp'
+    log_file = os.path.join(log_dir, 'rabbitmq_consumer.log')
+    
+    # File handler - logs everything
+    try:
+        fh = logging.FileHandler(log_file)
+        fh.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        fh.setFormatter(file_formatter)
+        logger.addHandler(fh)
+    except Exception:
+        pass
+    
+    # Console handler - logs warning and above
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.WARNING)
+    console_formatter = logging.Formatter('%(levelname)s - %(message)s')
+    ch.setFormatter(console_formatter)
+    logger.addHandler(ch)
+    
+    # Loki handler - push logs to Loki using python-loki
+    if LOKI_AVAILABLE:
+        loki_url = os.getenv("LOKI_URL", "http://loki.monitoring:3100")
+        try:
+            loki_handler = LokiHandler(
+                url=loki_url,
+                tags={"job": "rabbitmq_consumer", "service": "odoo_mifos_ledger_sync"},
+                version="1"
+            )
+            loki_handler.setLevel(logging.INFO)
+            logger.addHandler(loki_handler)
+        except Exception:
+            pass
+    
+    return logger
+
+_logger = setup_logger()
+
+MAX_RETRIES = 3  # Reduced from 5
+RETRY_BACKOFF = [0, 1, 3]  # Exponential backoff (0s, 1s, 3s)
+PREFETCH_COUNT = 10  # Increased from 1 for better throughput
+THREAD_POOL_SIZE = 5  # Process 5 messages in parallel
+
+# Handler mapping for faster lookups
+HANDLER_MAP = {
+    'transaction_queue': ('Processing transaction', process_transaction),
+    'account_queue': ('Creating account', create_account),
+    'update_journal_queue': ('Updating journal', update_journal_entry_in_database),
+}
+
+FAILURE_QUEUE_MAP = {
+    'transaction_queue': 'transaction_failure_queue',
+    'account_queue': 'account_failure_queue',
+    'update_journal_queue': 'update_journal_failure_queue'
+}
 
 class BatchProcessor(models.Model):
     _name = 'custom_journal_entry.batch_processor'
+    _connection = None
+    _channel = None
+    _lock = threading.Lock()
 
-    def send_notification(self, message):
-        """Send notification about the transaction or account processing status."""
-        logging.info(f"Notification: {message}")
+    @classmethod
+    def get_connection(cls):
+        """Get or create RabbitMQ connection (singleton pattern)."""
+        if cls._connection is None or cls._connection.is_closed:
+            host = os.getenv("RABBITMQ_HOST", "rabbitmq")
+            port = int(os.getenv("RABBITMQ_PORT", "5672"))
+            virtual_host = os.getenv("RABBITMQ_VHOST", "/")
+            username = os.getenv("RABBITMQ_USERNAME", "guest")
+            password = os.getenv("RABBITMQ_PASSWORD", "guest")
+            
+            params = pika.ConnectionParameters(
+                host=host, port=port, virtual_host=virtual_host,
+                credentials=pika.PlainCredentials(username, password),
+                connection_attempts=3, retry_delay=2,
+                socket_options=[(1, 9, 1)]  # TCP_NODELAY for lower latency
+            )
+            cls._connection = pika.BlockingConnection(params)
+        return cls._connection
 
-    def process_message(self, ch, method, properties, body, retry_count=0):
-        """Process a single message from RabbitMQ and route it to the appropriate handler."""
+    @classmethod
+    def get_channel(cls):
+        """Get or create channel (reuse connection)."""
+        if cls._channel is None or cls._channel.is_closed:
+            cls._channel = cls.get_connection().channel()
+            cls._channel.basic_qos(prefetch_count=PREFETCH_COUNT)
+            # Declare all queues once
+            for q in ['transaction_queue', 'account_queue', 'update_journal_queue',
+                     'transaction_failure_queue', 'account_failure_queue', 'update_journal_failure_queue']:
+                cls._channel.queue_declare(queue=q, durable=True)
+        return cls._channel
+
+    def process_message(self, ch, method, body, retry_count=0):
+        """Process single message with optimized error handling."""
         batch_ref = None
         try:
             message = json.loads(body)
             batch_ref = message.get('batch_ref')
             payload = message.get('payload')
             queue_type = method.routing_key
-
-            if queue_type == 'transaction_queue':
-                logging.info(f"Processing transaction for batch {batch_ref} --")
-                success = process_transaction(payload)
-                if success:
-                    self.send_notification(f"Journal batch {batch_ref} processed and updated successfully.")
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                else:
-                    raise Exception("Transaction processing failed")
-            elif queue_type == 'account_queue':
-                success = create_account(payload)
-                if success:
-                    self.send_notification(f"Account batch {batch_ref} processed successfully.")
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                else:
-                    raise Exception("Account creation failed")
-            elif queue_type == 'update_journal_queue':
-                logging.info(f"Updating journal entry for batch {batch_ref} --")
-                success = update_journal_entry_in_database(payload)
-                if success:
-                    self.send_notification(f"Journal entry batch {batch_ref} updated successfully.")
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                else:
-                    raise Exception("Journal entry update failed")
-        except json.JSONDecodeError as e:
-            self.send_notification(f"JSON decode error processing batch {batch_ref}: {str(e)}")
-            logging.error(f"JSON decode error: {str(e)}")
-            self.retry_or_move_to_failure_queue(ch, method, body, retry_count, queue_type)
-        except pika.exceptions.AMQPChannelError as e:
-            self.send_notification(f"AMQP error processing batch {batch_ref}: {str(e)}")
-            logging.error(f"AMQP error: {str(e)}")
-            self.retry_or_move_to_failure_queue(ch, method, body, retry_count, queue_type)
-        except Exception as e:
-            self.send_notification(f"Unexpected error processing batch {batch_ref}: {str(e)}")
-            logging.error(f"Unexpected error: {str(e)}")
-            self.retry_or_move_to_failure_queue(ch, method, body, retry_count, queue_type)
-
-    def retry_or_move_to_failure_queue(self, ch, method, body, retry_count, queue_type):
-        if retry_count < MAX_RETRIES:
-            logging.info(f"Retrying batch {json.loads(body).get('batch_ref')} ({retry_count+1}/{MAX_RETRIES})...")
-            time.sleep(RETRY_DELAY)
-            self.process_message(ch, method, None, body, retry_count+1)
-        else:
-            failure_queue = {
-                'transaction_queue': 'transaction_failure_queue',
-                'account_queue': 'account_failure_queue',
-                'update_journal_queue': 'update_journal_failure_queue'
-            }.get(queue_type)
-            if failure_queue:
-                logging.error(f"Max retries reached for batch {json.loads(body).get('batch_ref')}. Moving to {failure_queue}.")
-                ch.basic_publish(
-                    exchange='',
-                    routing_key=failure_queue,
-                    body=body,
-                    properties=pika.BasicProperties()
-                )
+            
+            if queue_type not in HANDLER_MAP:
+                _logger.warning(f"Unknown queue type: {queue_type} batch {batch_ref}")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+            
+            label, handler = HANDLER_MAP[queue_type]
+            _logger.debug(f"{label} batch {batch_ref}")
+            if handler(payload):
+                _logger.info(f"✓ batch {batch_ref} processed")
                 ch.basic_ack(delivery_tag=method.delivery_tag)
             else:
-                logging.error(f"No failure queue mapped for routing key '{queue_type}'")
+                raise Exception(f"{label} failed")
+                
+        except json.JSONDecodeError as e:
+            _logger.error(f"JSON error batch {batch_ref}: {e}")
+            self.retry_or_fail(ch, method, body, retry_count)
+        except Exception as e:
+            _logger.error(f"Error batch {batch_ref}: {e}")
+            self.retry_or_fail(ch, method, body, retry_count)
+
+    def retry_or_fail(self, ch, method, body, retry_count=0):
+        """Retry with exponential backoff or move to failure queue."""
+        if retry_count < MAX_RETRIES:
+            delay = RETRY_BACKOFF[retry_count]
+            batch_ref = json.loads(body).get('batch_ref')
+            _logger.warning(f"Retry {retry_count+1}/{MAX_RETRIES} batch {batch_ref} (wait {delay}s)")
+            time.sleep(delay)
+            self.process_message(ch, method, body, retry_count + 1)
+        else:
+            batch_ref = json.loads(body).get('batch_ref')
+            queue_type = method.routing_key
+            failure_queue = FAILURE_QUEUE_MAP.get(queue_type)
+            if failure_queue:
+                _logger.error(f"Failed batch {batch_ref} → {failure_queue}")
+                ch.basic_publish(exchange='', routing_key=failure_queue, body=body)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def fetch_and_process_messages(self):
-        """Fetch messages from RabbitMQ (both queues) and process them."""
-        connection_parameters = pika.ConnectionParameters(
-            host='rabbitmq',
-            port=5672,
-            virtual_host='/',
-            credentials=pika.PlainCredentials('guest', 'guest')
-        )
-        connection = pika.BlockingConnection(connection_parameters)
-        channel = connection.channel()
-        channel.queue_declare(queue='transaction_queue', durable=True)
-        channel.queue_declare(queue='account_queue', durable=True)
-        channel.queue_declare(queue='update_journal_queue', durable=True)
-        channel.queue_declare(queue='transaction_failure_queue', durable=True)
-        channel.queue_declare(queue='account_failure_queue', durable=True)
-        channel.queue_declare(queue='update_journal_failure_queue', durable=True)
+        """Continuous consumer with thread pool for parallel processing."""
+        try:
+            channel = self.get_channel()
+            executor = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
+            
+            def callback(ch, method, properties, body):
+                # Set queue type on method for handler routing
+                method.routing_key = method.routing_key or self._infer_queue_type(body)
+                # Process in thread pool (non-blocking)
+                executor.submit(self.process_message, ch, method, body, 0)
+            
+            for queue_name in ['transaction_queue', 'account_queue', 'update_journal_queue']:
+                channel.basic_consume(queue=queue_name, on_message_callback=callback)
+            
+            _logger.info(f"🚀 Consumer ready: prefetch={PREFETCH_COUNT} workers={THREAD_POOL_SIZE} retry_limit={MAX_RETRIES}")
+            channel.start_consuming()
+            
+        except Exception as e:
+            _logger.critical(f"Consumer fatal error: {e}", exc_info=True)
+            raise
 
-        for queue_name in ['transaction_queue', 'account_queue', 'update_journal_queue']:
-            method_frame, header_frame, body = channel.basic_get(queue=queue_name)
-            while method_frame:
-                self.process_message(channel, method_frame, None, body)
-                method_frame, header_frame, body = channel.basic_get(queue=queue_name)
-
-        connection.close()
+    @staticmethod
+    def _infer_queue_type(body):
+        """Fast queue type inference."""
+        try:
+            body_str = body.decode('utf-8', errors='ignore').lower()
+            for queue_type in ['transaction', 'account', 'update_journal']:
+                if queue_type in body_str:
+                    return f"{queue_type}_queue"
+        except:
+            pass
+        return None
 
     @api.model
     def run_batch_processor(self):
-        """Run the batch processor as a cron job."""
-        self.fetch_and_process_messages()
+        """Run the batch processor as background service."""
+        # Start consumer in daemon thread
+        consumer_thread = Thread(target=self.fetch_and_process_messages, daemon=True)
+        consumer_thread.start()
+        _logger.info("Batch processor started")
