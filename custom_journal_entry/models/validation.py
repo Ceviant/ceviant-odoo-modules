@@ -100,33 +100,29 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # Try with 'name' first (standard in Odoo 17)
-        currency = env['res.currency'].sudo().search([('name', '=', currency_code.upper())], limit=1)
-        if currency:
-            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
-            return currency.id
-    except ValueError as e:
-        if "Invalid field" in str(e):
-            _logger.warning(f"Field 'name' invalid for res.currency, trying 'code': {e}")
+        # Get all currencies and find the one with matching code
+        currencies = env['res.currency'].sudo().search([])
+        for currency in currencies:
+            # Try to match by 'name' or 'code'
             try:
-                # Fallback to 'code' (possibly in Odoo 18 or custom setups)
-                currency = env['res.currency'].sudo().search([('code', '=', currency_code.upper())], limit=1)
-                if currency:
+                if currency.name == currency_code.upper():
+                    _logger.info(f"Found currency {currency_code} with ID {currency.id} using 'name'")
+                    return currency.id
+            except AttributeError:
+                pass
+            try:
+                if currency.code == currency_code.upper():
                     _logger.info(f"Found currency {currency_code} with ID {currency.id} using 'code'")
                     return currency.id
-            except Exception as e2:
-                _logger.error(f"Fallback currency lookup also failed for {currency_code}: {e2}")
-        else:
-            _logger.error(f"Currency lookup failed for {currency_code}: {e}")
-            import traceback
-            _logger.error(f"Traceback: {traceback.format_exc()}")
+            except AttributeError:
+                pass
+        _logger.warning(f"Currency {currency_code} not found")
+        return None
     except Exception as e:
         _logger.error(f"Currency lookup failed for {currency_code}: {e}")
         import traceback
         _logger.error(f"Traceback: {traceback.format_exc()}")
-    
-    _logger.warning(f"Currency {currency_code} not found")
-    return None
+        return None
 
 
 def get_available_currencies():
@@ -141,6 +137,10 @@ def get_available_currencies():
             try:
                 code = curr.code
             except AttributeError:
-                code = ''
-        result.append({'id': curr.id, 'code': code, 'symbol': curr.symbol})
+                code = str(curr.id)  # Fallback to ID if no code field
+        try:
+            symbol = curr.symbol
+        except AttributeError:
+            symbol = ''
+        result.append({'id': curr.id, 'code': code, 'symbol': symbol})
     return result
