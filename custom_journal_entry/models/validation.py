@@ -100,29 +100,25 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # Get all currencies and find the one with matching code
-        currencies = env['res.currency'].sudo().search([], order='id')
+        # Get all currencies with possible fields
+        currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name', 'code', 'iso_code', 'currency_code'])
         for currency in currencies:
-            # Try to match by possible field names for currency code
-            for attr in ['code', 'name', 'iso_code', 'currency_code']:
-                try:
-                    if getattr(currency, attr).upper() == currency_code.upper():
-                        _logger.info(f"Found currency {currency_code} with ID {currency.id} using '{attr}'")
-                        return currency.id
-                except (AttributeError, TypeError):
-                    pass
+            # Check each possible field
+            for field in ['code', 'name', 'iso_code', 'currency_code']:
+                if field in currency and currency[field]:
+                    if str(currency[field]).upper() == currency_code.upper():
+                        _logger.info(f"Found currency {currency_code} with ID {currency['id']} using '{field}'")
+                        return currency['id']
         
         # If not found, try fallback to default currency
         _logger.warning(f"Currency {currency_code} not found, trying fallback to default currency")
         default_code = get_default_currency()
         for currency in currencies:
-            for attr in ['code', 'name', 'iso_code', 'currency_code']:
-                try:
-                    if getattr(currency, attr).upper() == default_code.upper():
-                        _logger.info(f"Using fallback currency {default_code} with ID {currency.id} using '{attr}'")
-                        return currency.id
-                except (AttributeError, TypeError):
-                    pass
+            for field in ['code', 'name', 'iso_code', 'currency_code']:
+                if field in currency and currency[field]:
+                    if str(currency[field]).upper() == default_code.upper():
+                        _logger.info(f"Using fallback currency {default_code} with ID {currency['id']} using '{field}'")
+                        return currency['id']
         
         _logger.warning(f"Currency {currency_code} and default {default_code} not found")
         return None
@@ -136,22 +132,16 @@ def get_currency_id(env, currency_code):
 def get_available_currencies():
     """Get list of all available currencies in the system."""
     env = request.env
-    currencies = env['res.currency'].sudo().search([], order='id')
+    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name', 'code', 'iso_code', 'currency_code', 'symbol'])
     result = []
     for curr in currencies:
         code = None
-        for attr in ['code', 'name', 'iso_code', 'currency_code']:
-            try:
-                code = getattr(curr, attr)
-                if code:
-                    break
-            except AttributeError:
-                pass
+        for field in ['code', 'name', 'iso_code', 'currency_code']:
+            if field in curr and curr[field]:
+                code = str(curr[field])
+                break
         if not code:
-            code = str(curr.id)  # Fallback to ID if no code field
-        try:
-            symbol = curr.symbol
-        except AttributeError:
-            symbol = ''
-        result.append({'id': curr.id, 'code': code, 'symbol': symbol})
+            code = str(curr.get('id', ''))
+        symbol = curr.get('symbol', '')
+        result.append({'id': curr['id'], 'code': code, 'symbol': symbol})
     return result
