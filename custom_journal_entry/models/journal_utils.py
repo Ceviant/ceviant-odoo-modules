@@ -1,11 +1,10 @@
 import logging
-import datetime
+from datetime import datetime
 from odoo import http
 from odoo.http import request
-from .validation import validate_journal_entry, validate_account_ids, get_currency_id, get_default_currency
+from .validation import validate_journal_entry, validate_account_ids, get_default_currency
 
 _logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
 
 
 def get_env():
@@ -24,6 +23,7 @@ def get_env():
             _logger.error("No database configured")
             raise RuntimeError("Database not configured")
         
+        cr = None
         try:
             # Get the registry for the database
             reg = registry.Registry(db_name)
@@ -34,7 +34,7 @@ def get_env():
             # Create cursor
             cr = db_connection.cursor()
             
-            # Create environment
+            # Create environment - cr will be managed by the environment
             env = api.Environment(cr, SUPERUSER_ID, {})
             
             _logger.info(f"✓ Successfully created environment for database: {db_name}")
@@ -43,6 +43,12 @@ def get_env():
             _logger.error(f"Failed to initialize Odoo environment: {type(e).__name__}: {str(e)}")
             import traceback
             _logger.error(f"Traceback: {traceback.format_exc()}")
+            # Explicitly close cursor if it was created
+            if cr is not None:
+                try:
+                    cr.close()
+                except Exception:
+                    pass
             raise RuntimeError(f"Cannot create environment: {str(e)}")
 
 
@@ -51,6 +57,33 @@ def get_company_id(env):
     user = env.user
     company_id = user.company_id.id
     return company_id
+
+
+def get_currency_id(env, currency_code):
+    """Get or create currency by code using proper environment."""
+    try:
+        # Search by code first
+        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
+        if currency:
+            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
+            return currency.id
+        
+        # Try by name
+        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+        if currency:
+            _logger.info(f"Found currency by name {currency_code} with ID {currency.id}")
+            return currency.id
+        
+        # Create if not found
+        _logger.info(f"Creating new currency {currency_code}")
+        new_currency = env['res.currency'].sudo().create({'code': currency_code, 'name': currency_code})
+        _logger.info(f"Created currency {currency_code} with ID {new_currency.id}")
+        return new_currency.id
+    except Exception as e:
+        _logger.error(f"Currency lookup/creation failed for {currency_code}: {e}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
@@ -81,6 +114,68 @@ def create_or_get_ledger_sync_journal(env, company_id):
     except Exception as e:
         _logger.error(f"Failed to create 'Ledger Sync' journal: {str(e)}")
         return None
+
+
+def _create_custom_entry_lines(env, custom_journal_entry, payload):
+    """Create custom journal entry lines for both credits and debits."""
+    for credit in payload.get('credits', []):
+        account_id = credit.get('glAccountId')
+        amount = credit.get('amount')
+        _logger.debug(f"Creating custom credit line for account_id: {account_id} with amount: {amount}")
+        try:
+            env['custom.journal.entry.line'].sudo().create({
+                'journal_entry_id': custom_journal_entry.id,
+                'gl_account_id': account_id,
+                'amount': amount,
+                'type': 'credit'
+            })
+        except Exception as e:
+            _logger.error(f"Error creating custom credit line for account_id: {account_id}. Error: {e}")
+
+    for debit in payload.get('debits', []):
+        account_id = debit.get('glAccountId')
+        amount = debit.get('amount')
+        _logger.debug(f"Creating custom debit line for account_id: {account_id} with amount: {amount}")
+        try:
+            env['custom.journal.entry.line'].sudo().create({
+                'journal_entry_id': custom_journal_entry.id,
+                'gl_account_id': account_id,
+                'amount': amount,
+                'type': 'debit'
+            })
+        except Exception as e:
+            _logger.error(f"Error creating custom debit line for account_id: {account_id}. Error: {e}")
+
+
+def _create_account_move_lines(env, existing_entry, payload):
+    """Create account move lines for both credits and debits."""
+    for credit in payload.get('credits', []):
+        account_id = credit.get('glAccountId')
+        amount = credit.get('amount')
+        _logger.debug(f"Creating credit line for account_id: {account_id} with amount: {amount}")
+        try:
+            env['account.move.line'].sudo().create({
+                'move_id': existing_entry.id,
+                'account_id': account_id,
+                'credit': amount,
+                'debit': 0
+            })
+        except Exception as e:
+            _logger.error(f"Error creating credit line for account_id: {account_id}. Error: {e}")
+
+    for debit in payload.get('debits', []):
+        account_id = debit.get('glAccountId')
+        amount = debit.get('amount')
+        _logger.debug(f"Creating debit line for account_id: {account_id} with amount: {amount}")
+        try:
+            env['account.move.line'].sudo().create({
+                'move_id': existing_entry.id,
+                'account_id': account_id,
+                'debit': amount,
+                'credit': 0
+            })
+        except Exception as e:
+            _logger.error(f"Error creating debit line for account_id: {account_id}. Error: {e}")
 
 
 def _prepare_line_ids(payload, valid_account_ids, env):
@@ -123,11 +218,11 @@ def process_transaction(payload):
         return False
 
     currency_code = payload.get("currencyCode")
-    currency_id = get_currency_id(currency_code)
+    currency_id = get_currency_id(env, currency_code)
     if not currency_id:
         _logger.warning(f"Currency code {currency_code} not found. Using default currency NGN.")
         default_currency_code = get_default_currency()
-        currency_id = get_currency_id(default_currency_code)
+        currency_id = get_currency_id(env, default_currency_code)
         if not currency_id:
             _logger.error(f"Failed to get default currency {default_currency_code}.")
             return False
@@ -150,8 +245,8 @@ def process_transaction(payload):
 
     transaction_date_str = payload.get("transactionDate")
     try:
-        transaction_date = datetime.datetime.strptime(transaction_date_str, "%d %B %Y").strftime("%Y-%m-%d")
-    except ValueError as e:
+        transaction_date = datetime.strptime(transaction_date_str, "%d %B %Y").strftime("%Y-%m-%d")
+    except (ValueError, TypeError) as e:
         _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
         return False
 
@@ -162,6 +257,7 @@ def process_transaction(payload):
     if not journal:
         _logger.error("Failed to retrieve or create the 'Ledger Sync' journal.")
         return False
+
     transaction_reference = payload.get("transactionReference")
     existing_transaction = env["account.move"].search([
         ("ref", "=", transaction_reference)
@@ -207,16 +303,17 @@ def process_transaction(payload):
 
         # Create journal entry lines
         for line in line_ids:
-            amount = line[2]['credit'] if line[2]['credit'] > 0 else line[2]['debit']
-            line_type = 'credit' if line[2]['credit'] > 0 else 'debit'
+            line_data = line[2]
+            amount = line_data['credit'] or line_data['debit']
+            line_type = 'credit' if line_data['credit'] > 0 else 'debit'
 
             env["custom.journal.entry.line"].create({
                 'journal_entry_id': custom_journal_entry.id,
-                'gl_account_id': line[2]['account_id'],
+                'gl_account_id': line_data['account_id'],
                 'amount': amount,
                 'type': line_type,
             })
-            _logger.info(f"Created line for journal entry: {custom_journal_entry.id}, Account ID: {line[2]['account_id']}, Amount: {amount}, Type: {line_type}")
+            _logger.debug(f"Created line for journal entry: {custom_journal_entry.id}, Account ID: {line_data['account_id']}, Amount: {amount}, Type: {line_type}")
 
     except Exception as e:
         _logger.error(f"Error creating journal entry: {e}")
@@ -245,8 +342,8 @@ def update_journal_entry_in_database(payload):
 
     # Parse transaction date
     try:
-        transaction_date = datetime.datetime.strptime(transaction_date_str, '%d %B %Y').strftime('%Y-%m-%d')
-    except ValueError as e:
+        transaction_date = datetime.strptime(transaction_date_str, '%d %B %Y').strftime('%Y-%m-%d')
+    except (ValueError, TypeError) as e:
         _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
         return {'status': 'error', 'message': 'Invalid transaction date format.'}
 
@@ -268,116 +365,49 @@ def update_journal_entry_in_database(payload):
     _logger.info("Amounts are balanced. Proceeding with update...")
 
     try:
-
         existing_entry.write({
             'date': transaction_date,
             'ref': transaction_reference,
             'narration': payload.get('comments'),
-            'currency_id': get_currency_id(payload.get('currencyCode')),
+            'currency_id': get_currency_id(env, payload.get('currencyCode')),
         })
         _logger.info(f"Updated journal entry with date: {transaction_date}, reference: {transaction_reference}")
 
+        currency_id = get_currency_id(env, payload.get("currencyCode"))
         custom_update_data = {
             "branch_id": payload.get("branchId"),
             "transaction_date": transaction_date,
             "time_stamp": payload.get("timeStamp"),
-            "currency_id": get_currency_id(payload.get("currencyCode")),
+            "currency_id": currency_id,
         }
         _logger.debug(f"Custom journal entry update data: {custom_update_data}")
 
-        try:
-            custom_journal_entry = env['custom.journal.entry'].sudo().search([('transaction_reference', '=', transaction_reference)], limit=1)
-            if custom_journal_entry:
-                custom_journal_entry.write(custom_update_data)
-                _logger.info(f"Custom journal entry {custom_journal_entry.id} updated successfully.")
-
-                _logger.info(f"Unlinking existing custom debit and credit lines for entry: {custom_journal_entry.id}")
-                custom_journal_entry.line_ids.unlink()
-
-                for credit in payload.get('credits', []):
-                    account_id = credit.get('glAccountId')
-                    amount = credit.get('amount')
-                    _logger.info(f"Creating custom credit line for account_id: {account_id} with amount: {amount}")
-                    try:
-                        env['custom.journal.entry.line'].sudo().create({
-                            'journal_entry_id': custom_journal_entry.id,
-                            'gl_account_id': account_id,
-                            'amount': amount,
-                            'type': 'credit'
-                        })
-                    except Exception as e:
-                        _logger.error(f"Error creating custom credit line for account_id: {account_id} with amount: {amount}. Error: {e}")
-
-
-                for debit in payload.get('debits', []):
-                    account_id = debit.get('glAccountId')
-                    amount = debit.get('amount')
-                    _logger.info(f"Creating custom debit line for account_id: {account_id} with amount: {amount}")
-                    try:
-                        env['custom.journal.entry.line'].sudo().create({
-                            'journal_entry_id': custom_journal_entry.id,
-                            'gl_account_id': account_id,
-                            'amount': amount,
-                            'type': 'debit'
-                        })
-                    except Exception as e:
-                        _logger.error(f"Error creating custom debit line for account_id: {account_id} with amount: {amount}. Error: {e}")
-            else:
-                _logger.warning("Custom journal entry not found; skipping update for custom model.")
-        except Exception as e:
-            _logger.error(f"Error updating custom journal entry fields: {e}", exc_info=True)
-            # Do not raise, just log the error and continue
+        custom_journal_entry = env['custom.journal.entry'].sudo().search([('transaction_reference', '=', transaction_reference)], limit=1)
+        if custom_journal_entry:
+            custom_journal_entry.write(custom_update_data)
+            _logger.info(f"Custom journal entry {custom_journal_entry.id} updated successfully.")
+            _logger.debug(f"Unlinking existing custom lines for entry: {custom_journal_entry.id}")
+            custom_journal_entry.line_ids.unlink()
+            _create_custom_entry_lines(env, custom_journal_entry, payload)
+        else:
+            _logger.warning("Custom journal entry not found; skipping update for custom model.")
 
         # Unlink existing lines in Odoo
-        existing_lines = existing_entry.line_ids
-        _logger.info(f"Existing lines before unlinking: {[line.id for line in existing_lines]}")
+        _logger.debug(f"Unlinking existing move lines for entry: {existing_entry.id}")
         existing_entry.line_ids.unlink()
-        _logger.info(f"Existing lines after unlinking: {[line.id for line in existing_entry.line_ids]}")
+        _create_account_move_lines(env, existing_entry, payload)
 
-        # Create credit lines in Odoo
-        for credit in payload.get('credits', []):
-            account_id = credit.get('glAccountId')
-            amount = credit.get('amount')
-            _logger.info(f"Creating credit line for account_id: {account_id} with amount: {amount}")
-            try:
-                env['account.move.line'].sudo().create({
-                    'move_id': existing_entry.id,
-                    'account_id': account_id,
-                    'credit': amount,
-                    'debit': 0
-                })
-            except Exception as e:
-                _logger.error(f"Error creating credit line for account_id: {account_id} with amount: {amount}. Error: {e}")
-
-        # Create debit lines in Odoo
-        for debit in payload.get('debits', []):
-            account_id = debit.get('glAccountId')
-            amount = debit.get('amount')
-            _logger.info(f"Creating debit line for account_id: {account_id} with amount: {amount}")
-            try:
-                env['account.move.line'].sudo().create({
-                    'move_id': existing_entry.id,
-                    'account_id': account_id,
-                    'debit': amount,
-                    'credit': 0
-                })
-            except Exception as e:
-                _logger.error(f"Error creating debit line for account_id: {account_id} with amount: {amount}. Error: {e}")
-
-        # Check final balance in Odoo
+        # Check final balance
         total_debits_existing = sum(line.debit for line in existing_entry.line_ids)
         total_credits_existing = sum(line.credit for line in existing_entry.line_ids)
-        _logger.info(f"Final total debits: {total_debits_existing}")
-        _logger.info(f"Final total credits: {total_credits_existing}")
+        _logger.debug(f"Final balance - Debits: {total_debits_existing}, Credits: {total_credits_existing}")
 
         if total_debits_existing != total_credits_existing:
-            _logger.error(f"Journal entry is not balanced. Total debits: {total_debits_existing}, Total credits: {total_credits_existing}")
+            _logger.error(f"Journal entry is not balanced. Debits: {total_debits_existing}, Credits: {total_credits_existing}")
             return {'status': 'error', 'message': 'Journal entry is not balanced'}
 
     except Exception as e:
-        _logger.error(f"Error updating journal entry: {e}")
-        import traceback
-        _logger.error(f"Traceback: {traceback.format_exc()}")
+        _logger.error(f"Error updating journal entry: {e}", exc_info=True)
         return {'status': 'error', 'message': 'An error occurred while updating the journal entry'}
 
     return {'status': 'success', 'message': 'Journal entry updated successfully'}

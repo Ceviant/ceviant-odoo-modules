@@ -85,44 +85,6 @@ def validate_account_ids(env, account_ids):
         return set()
 
 
-def get_currency_id(currency_code):
-    """Get or create currency by code."""
-    try:
-        env = request.env
-    except (RuntimeError, AttributeError):
-        from odoo import api, SUPERUSER_ID
-        from odoo.tools import config
-        from odoo import sql_db
-        
-        db_name = config.get('db_name')
-        if not db_name:
-            return None
-        
-        try:
-            db_connection = sql_db.db_connect(db_name)
-            cr = db_connection.cursor()
-            env = api.Environment(cr, SUPERUSER_ID, {})
-        except Exception:
-            return None
-    
-    try:
-        # Search by code first
-        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
-        if currency:
-            return currency.id
-        
-        # Try by name
-        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
-        if currency:
-            return currency.id
-        
-        # Create if not found
-        return env['res.currency'].sudo().create({'code': currency_code, 'name': currency_code}).id
-    except Exception as e:
-        _logger.error(f"Currency lookup failed for {currency_code}: {e}")
-        return None
-
-
 def get_default_currency():
     """Get Odoo's default currency or fallback to NGN."""
     try:
