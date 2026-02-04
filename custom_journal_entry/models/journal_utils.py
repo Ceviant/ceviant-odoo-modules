@@ -197,12 +197,8 @@ def process_transaction(payload):
     currency_code = payload.get("currencyCode")
     currency_id = get_currency_id(env, currency_code)
     if not currency_id:
-        _logger.warning(f"Currency code {currency_code} not found. Using default currency NGN.")
-        default_currency_code = get_default_currency()
-        currency_id = get_currency_id(env, default_currency_code)
-        if not currency_id:
-            _logger.error(f"Failed to get default currency {default_currency_code}.")
-            return {'status': 'error', 'message': f"Failed to get currency {currency_code}"}
+        _logger.error(f"Failed to get currency {currency_code} or default.")
+        return {'status': 'error', 'message': f"Failed to get currency {currency_code}"}
 
     credits = [credit.get("glAccountId") for credit in payload.get("credits", [])]
     debits = [debit.get("glAccountId") for debit in payload.get("debits", [])]
