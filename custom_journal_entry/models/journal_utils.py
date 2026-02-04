@@ -8,6 +8,52 @@ _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 
+def get_env():
+    """Get Odoo environment with proper database and user context."""
+    try:
+        return request.env
+    except (RuntimeError, AttributeError):
+        # Outside HTTP context (e.g., from RabbitMQ consumer thread)
+        from odoo import api, SUPERUSER_ID
+        from odoo.tools import config
+        from odoo.modules import registry
+        
+        db_name = config.get('db_name')
+        if not db_name:
+            _logger.error("No database configured")
+            raise RuntimeError("Database not configured")
+        
+        try:
+            # Get the registry for the database
+            reg = registry.Registry(db_name)
+            
+            # Get database connection
+            db_connection = api.sql_db.db_connect(db_name)
+            if not db_connection:
+                _logger.error(f"Failed to connect to database: {db_name}")
+                raise RuntimeError(f"Cannot connect to database: {db_name}")
+            
+            # Create cursor
+            cr = db_connection.cursor()
+            if not cr:
+                _logger.error(f"Failed to create database cursor for: {db_name}")
+                raise RuntimeError(f"Cannot create cursor for database: {db_name}")
+            
+            # Create environment
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            if not env:
+                _logger.error("Failed to create Odoo environment")
+                raise RuntimeError("Cannot create Odoo environment")
+            
+            _logger.info(f"✓ Successfully created environment for database: {db_name}")
+            return env
+        except Exception as e:
+            _logger.error(f"Failed to initialize Odoo environment: {type(e).__name__}: {str(e)}")
+            import traceback
+            _logger.error(f"Traceback: {traceback.format_exc()}")
+            raise RuntimeError(f"Cannot create environment: {str(e)}")
+
+
 def get_company_id(env):
     """Retrieve the company_id for the current user in Odoo."""
     user = env.user
@@ -72,7 +118,12 @@ def _prepare_line_ids(payload, valid_account_ids, env):
 
 def process_transaction(payload):
     """Process a transaction, including validation and posting to Odoo."""
-    env = http.request.env
+    try:
+        env = get_env()
+    except Exception as e:
+        _logger.error(f"Failed to get environment: {e}")
+        return False
+    
     is_valid, validation_error = validate_journal_entry(payload)
 
     if not is_valid:
@@ -123,7 +174,7 @@ def process_transaction(payload):
     if existing_transaction:
         error_message = f"Transaction with reference '{transaction_reference}' already exists."
         _logger.error(error_message)
-        raise ValueError(error_message)  # Raise an exception if a duplicate is found
+        return False
 
     _logger.info(f"Journal ID: {journal.id}, Journal Name: {journal.name}")
 
@@ -173,6 +224,8 @@ def process_transaction(payload):
 
     except Exception as e:
         _logger.error(f"Error creating journal entry: {e}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
     return True
@@ -180,6 +233,12 @@ def process_transaction(payload):
 
 def update_journal_entry_in_database(payload):
     """Update a journal entry in the custom journal entry model in the database."""
+    try:
+        env = get_env()
+    except Exception as e:
+        _logger.error(f"Failed to get environment: {e}")
+        return {'status': 'error', 'message': f"Failed to get environment: {str(e)}"}
+    
     is_valid, validation_error = validate_journal_entry(payload)
     if not is_valid:
         _logger.error(f"Payload validation failed: {validation_error}")
@@ -195,12 +254,11 @@ def update_journal_entry_in_database(payload):
         _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
         return {'status': 'error', 'message': 'Invalid transaction date format.'}
 
-    env = request.env
     existing_entry = env['account.move'].sudo().search([('ref', '=', transaction_reference)], limit=1)
 
     if not existing_entry:
         _logger.error(f"No journal entry found with reference: {transaction_reference}")
-        raise ValueError(f"No journal entry found with reference: {transaction_reference}")
+        return {'status': 'error', 'message': f"No journal entry found with reference: {transaction_reference}"}
 
     _logger.info(f"Journal entry found: {existing_entry.id}")
 
@@ -209,7 +267,7 @@ def update_journal_entry_in_database(payload):
 
     if total_debits != total_credits:
         _logger.error(f"Debits and credits do not match. Total debits: {total_debits}, Total credits: {total_credits}")
-        raise ValueError('Journal entry is not balanced')
+        return {'status': 'error', 'message': 'Journal entry is not balanced'}
 
     _logger.info("Amounts are balanced. Proceeding with update...")
 
@@ -232,7 +290,7 @@ def update_journal_entry_in_database(payload):
         _logger.debug(f"Custom journal entry update data: {custom_update_data}")
 
         try:
-            custom_journal_entry = env['custom.journal.entry.model'].sudo().search([('ref', '=', transaction_reference)], limit=1)
+            custom_journal_entry = env['custom.journal.entry'].sudo().search([('transaction_reference', '=', transaction_reference)], limit=1)
             if custom_journal_entry:
                 custom_journal_entry.write(custom_update_data)
                 _logger.info(f"Custom journal entry {custom_journal_entry.id} updated successfully.")
@@ -247,9 +305,9 @@ def update_journal_entry_in_database(payload):
                     try:
                         env['custom.journal.entry.line'].sudo().create({
                             'journal_entry_id': custom_journal_entry.id,
-                            'account_id': account_id,
-                            'credit': amount,
-                            'debit': 0
+                            'gl_account_id': account_id,
+                            'amount': amount,
+                            'type': 'credit'
                         })
                     except Exception as e:
                         _logger.error(f"Error creating custom credit line for account_id: {account_id} with amount: {amount}. Error: {e}")
@@ -262,9 +320,9 @@ def update_journal_entry_in_database(payload):
                     try:
                         env['custom.journal.entry.line'].sudo().create({
                             'journal_entry_id': custom_journal_entry.id,
-                            'account_id': account_id,
-                            'debit': amount,
-                            'credit': 0
+                            'gl_account_id': account_id,
+                            'amount': amount,
+                            'type': 'debit'
                         })
                     except Exception as e:
                         _logger.error(f"Error creating custom debit line for account_id: {account_id} with amount: {amount}. Error: {e}")
@@ -322,6 +380,8 @@ def update_journal_entry_in_database(payload):
 
     except Exception as e:
         _logger.error(f"Error updating journal entry: {e}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
         return {'status': 'error', 'message': 'An error occurred while updating the journal entry'}
 
     return {'status': 'success', 'message': 'Journal entry updated successfully'}
