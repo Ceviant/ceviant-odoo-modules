@@ -101,7 +101,7 @@ def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
         # Try to find existing currency by code
-        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
+        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
         if currency:
             _logger.info(f"Found currency {currency_code} with ID {currency.id}")
             return currency.id
@@ -117,5 +117,5 @@ def get_currency_id(env, currency_code):
 def get_available_currencies():
     """Get list of all available currencies in the system."""
     env = request.env
-    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'code', 'symbol'])
-    return [{'id': curr['id'], 'code': curr['code'], 'symbol': curr['symbol']} for curr in currencies]
+    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name', 'symbol'])
+    return [{'id': curr['id'], 'code': curr['name'], 'symbol': curr['symbol']} for curr in currencies]
