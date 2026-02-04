@@ -90,6 +90,8 @@ class BatchProcessor(models.Model):
     _channel = None
     _consumer_active = False
     _lock = threading.Lock()
+    _active_consumers = 0  # Track number of active consumers
+    _consumers_lock = threading.Lock()  # Lock for consumer count updates
 
     @classmethod
     def get_connection(cls):
@@ -227,7 +229,14 @@ class BatchProcessor(models.Model):
     def fetch_and_process_messages(self):
         """Continuous consumer with thread pool for parallel processing and auto-reconnection."""
         consumer_id = threading.current_thread().name
+        
+        # Increment active consumer count
+        with self._consumers_lock:
+            BatchProcessor._active_consumers += 1
+            active_count = BatchProcessor._active_consumers
+        
         _logger.info(f"\n{consumer_id} - Starting fetch_and_process_messages")
+        _logger.info(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
         
         while True:  # Keep running indefinitely
             try:
@@ -247,30 +256,35 @@ class BatchProcessor(models.Model):
                 
                 _logger.info(f"\n{'='*80}")
                 _logger.info(f"🚀 {consumer_id} STARTED")
+                _logger.info(f"Consumer Status: {active_count}/{NUM_CONSUMERS} ACTIVE")
                 _logger.info(f"Thread Pool Size: {THREAD_POOL_SIZE} workers")
                 _logger.info(f"Prefetch Count: {PREFETCH_COUNT} messages")
                 _logger.info(f"Max Retries: {MAX_RETRIES}")
                 _logger.info(f"Listening on Queues: {', '.join(queues)}")
                 _logger.info(f"Status: CONSUMING MESSAGES")
-                _logger.info(f"{'='*80}\n")
+                _logger.info(f"{'='*80}")
+                _logger.info(f"✓ {consumer_id} is now READY and listening for messages\n")
                 
                 # This blocks until connection drops
                 channel.start_consuming()
                 
             except pika.exceptions.ConnectionClosedByBroker:
                 _logger.warning(f"{consumer_id} - Connection closed by broker, reconnecting in 5s...")
+                _logger.warning(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
                 time.sleep(5)
                 self._channel = None
                 self._connection = None
                 
             except pika.exceptions.AMQPChannelError as e:
                 _logger.error(f"{consumer_id} - AMQP Channel Error: {e}, reconnecting in 5s...")
+                _logger.error(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
                 time.sleep(5)
                 self._channel = None
                 self._connection = None
                 
             except pika.exceptions.AMQPConnectionError as e:
                 _logger.error(f"{consumer_id} - AMQP Connection Error: {e}, reconnecting in 5s...")
+                _logger.error(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
                 time.sleep(5)
                 self._channel = None
                 self._connection = None
@@ -278,6 +292,7 @@ class BatchProcessor(models.Model):
             except Exception as e:
                 _logger.critical(f"\n{consumer_id} - FATAL ERROR: {type(e).__name__} - {str(e)}")
                 _logger.critical(f"Traceback: ", exc_info=True)
+                _logger.critical(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
                 _logger.critical(f"Reconnecting in 10s...")
                 time.sleep(10)
                 self._channel = None
@@ -302,14 +317,20 @@ class BatchProcessor(models.Model):
             # Check if consumer is already running
             if self._consumer_active:
                 _logger.warning("Consumer is already active, skipping startup")
+                with self._consumers_lock:
+                    _logger.warning(f"Current Active Consumers: {BatchProcessor._active_consumers}/{NUM_CONSUMERS}")
                 return
             
             self._consumer_active = True
         
         try:
             _logger.info(f"\n{'='*80}")
-            _logger.info(f"Initializing Batch Processor Service")
-            _logger.info(f"Number of Consumers to Start: {NUM_CONSUMERS}")
+            _logger.info(f"🔧 BATCH PROCESSOR SERVICE INITIALIZATION")
+            _logger.info(f"{'='*80}")
+            _logger.info(f"Target Consumers: {NUM_CONSUMERS}")
+            _logger.info(f"Thread Pool Workers per Consumer: {THREAD_POOL_SIZE}")
+            _logger.info(f"Prefetch Count: {PREFETCH_COUNT} messages")
+            _logger.info(f"Max Retries: {MAX_RETRIES}")
             _logger.info(f"{'='*80}\n")
             
             # Start multiple consumers in NON-DAEMON threads (so they persist)
@@ -322,10 +343,13 @@ class BatchProcessor(models.Model):
                 )
                 consumer_thread.start()
                 consumer_threads.append(consumer_thread)
-                _logger.info(f"Started Consumer {i+1}/{NUM_CONSUMERS} as thread: {consumer_thread.name}")
+                _logger.info(f"[{i+1}/{NUM_CONSUMERS}] Spawned {consumer_thread.name}")
             
-            _logger.info(f"\n✓ All {NUM_CONSUMERS} consumers started successfully")
-            _logger.info(f"✓ Batch processor service is now ACTIVE")
+            _logger.info(f"\n{'='*80}")
+            _logger.info(f"✓ BATCH PROCESSOR SERVICE STARTED")
+            _logger.info(f"✓ All {NUM_CONSUMERS} consumers are spawning...")
+            _logger.info(f"✓ Consumers will connect to queues and enter listening mode")
+            _logger.info(f"✓ Check logs for consumer READY status confirmation")
             _logger.info(f"{'='*80}\n")
             
         except Exception as e:
