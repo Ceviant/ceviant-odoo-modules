@@ -100,27 +100,31 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # Odoo 17: Override _order with explicit order clause
-        currency_ids = env['res.currency'].sudo().search([], order='id')
-        _logger.info(f"Currency IDs found: {currency_ids}")
-        currencies = currency_ids.read(['id', 'name', 'code', 'iso_code', 'currency_code'])
-        for currency in currencies:
-            # Check each possible field
-            for field in ['code', 'name', 'iso_code', 'currency_code']:
-                if field in currency and currency[field]:
-                    if str(currency[field]).upper() == currency_code.upper():
-                        _logger.info(f"Found currency {currency_code} with ID {currency['id']} using '{field}'")
-                        return currency['id']
+        # Bypass Odoo's broken _order by using raw SQL with filter on name
+        env.cr.execute("""
+            SELECT id FROM res_currency 
+            WHERE UPPER(name) = %s AND active = true
+            LIMIT 1
+        """, (currency_code.upper(),))
+        result = env.cr.fetchone()
+        
+        if result:
+            _logger.info(f"Found currency {currency_code} with ID {result[0]}")
+            return result[0]
         
         # If not found, try fallback to default currency
         _logger.warning(f"Currency {currency_code} not found, trying fallback to default currency")
         default_code = get_default_currency()
-        for currency in currencies:
-            for field in ['code', 'name', 'iso_code', 'currency_code']:
-                if field in currency and currency[field]:
-                    if str(currency[field]).upper() == default_code.upper():
-                        _logger.info(f"Using fallback currency {default_code} with ID {currency['id']} using '{field}'")
-                        return currency['id']
+        env.cr.execute("""
+            SELECT id FROM res_currency 
+            WHERE UPPER(name) = %s AND active = true
+            LIMIT 1
+        """, (default_code.upper(),))
+        result = env.cr.fetchone()
+        
+        if result:
+            _logger.info(f"Using fallback currency {default_code} with ID {result[0]}")
+            return result[0]
         
         _logger.warning(f"Currency {currency_code} and default {default_code} not found")
         return None
@@ -134,18 +138,23 @@ def get_currency_id(env, currency_code):
 def get_available_currencies():
     """Get list of all available currencies in the system."""
     env = request.env
-    # Odoo 17: Override _order with explicit order clause
-    currency_ids = env['res.currency'].sudo().search([], order='id')
-    currencies = currency_ids.read(['id', 'name', 'code', 'iso_code', 'currency_code', 'symbol'])
+    # Bypass Odoo's broken _order by using raw SQL
+    env.cr.execute("""
+        SELECT id, name, code, iso_code, symbol 
+        FROM res_currency 
+        ORDER BY id
+    """)
+    currencies = env['res.currency'].browse([c[0] for c in env.cr.fetchall()])
     result = []
     for curr in currencies:
         code = None
-        for field in ['code', 'name', 'iso_code', 'currency_code']:
-            if field in curr and curr[field]:
-                code = str(curr[field])
+        for field in ['code', 'iso_code']:
+            value = getattr(curr, field, None)
+            if value:
+                code = str(value)
                 break
         if not code:
-            code = str(curr.get('id', ''))
-        symbol = curr.get('symbol', '')
-        result.append({'id': curr['id'], 'code': code, 'symbol': symbol})
+            code = str(curr.id)
+        symbol = getattr(curr, 'symbol', '') or ''
+        result.append({'id': curr.id, 'code': code, 'symbol': symbol})
     return result
