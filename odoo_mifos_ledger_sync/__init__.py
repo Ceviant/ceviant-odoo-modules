@@ -24,7 +24,7 @@ def post_load_hook():
             from odoo.api import Environment
             from odoo.sql_db import db_connect
             
-            cr = db_connect().cursor()
+            cr = db_connect(db).cursor()
             try:
                 env = api.Environment(cr, SUPERUSER_ID, {})
                 batch_processor = env['custom_journal_entry.batch_processor']
