@@ -100,20 +100,12 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # Search for currency by code directly - using search_read with fields to avoid ordering issues
-        currency_rec = env['res.currency'].sudo().search_read(
-            [('name', '=', currency_code)],
-            fields=['id', 'name'],
-            limit=1
-        )
-        
-        if currency_rec:
-            _logger.info(f"Found currency {currency_code} with ID {currency_rec[0]['id']}")
-            return currency_rec[0]['id']
-        
+        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+        if currency:
+            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
+            return currency.id
         _logger.warning(f"Currency {currency_code} not found")
         return None
-
     except Exception as e:
         _logger.error(f"Currency lookup failed for {currency_code}: {e}")
         import traceback
@@ -124,5 +116,5 @@ def get_currency_id(env, currency_code):
 def get_available_currencies():
     """Get list of all available currencies in the system."""
     env = request.env
-    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'code', 'symbol'])
-    return [{'id': curr['id'], 'code': curr['code'], 'symbol': curr['symbol']} for curr in currencies]
+    currencies = env['res.currency'].sudo().search([])
+    return [{'id': curr.id, 'code': curr.name, 'symbol': curr.symbol} for curr in currencies]
