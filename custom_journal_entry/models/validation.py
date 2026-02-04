@@ -101,8 +101,8 @@ def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
         # Search for currency directly by filtering all currencies
-        # This approach avoids domain issues
-        all_currencies = env['res.currency'].sudo().with_context(active_test=False).search([])
+        # Use order='' to bypass the default _order that includes 'active' field which doesn't exist
+        all_currencies = env['res.currency'].sudo().with_context(active_test=False).search([], order='')
         
         _logger.info(f"DEBUG: All currencies object: {all_currencies}")
         _logger.info(f"DEBUG: All currencies repr: {repr(all_currencies)}")
