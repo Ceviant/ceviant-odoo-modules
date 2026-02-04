@@ -32,21 +32,12 @@ def get_env():
             
             # Get database connection
             db_connection = sql_db.db_connect(db_name)
-            if not db_connection:
-                _logger.error(f"Failed to connect to database: {db_name}")
-                raise RuntimeError(f"Cannot connect to database: {db_name}")
             
             # Create cursor
             cr = db_connection.cursor()
-            if not cr:
-                _logger.error(f"Failed to create database cursor for: {db_name}")
-                raise RuntimeError(f"Cannot create cursor for database: {db_name}")
             
             # Create environment
             env = api.Environment(cr, SUPERUSER_ID, {})
-            if not env:
-                _logger.error("Failed to create Odoo environment")
-                raise RuntimeError("Cannot create Odoo environment")
             
             _logger.info(f"✓ Successfully created environment for database: {db_name}")
             return env
