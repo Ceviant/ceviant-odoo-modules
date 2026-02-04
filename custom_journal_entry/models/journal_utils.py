@@ -17,6 +17,7 @@ def get_env():
         from odoo import api, SUPERUSER_ID
         from odoo.tools import config
         from odoo.modules import registry
+        from odoo import sql_db
         
         db_name = config.get('db_name')
         if not db_name:
@@ -28,7 +29,7 @@ def get_env():
             reg = registry.Registry(db_name)
             
             # Get database connection
-            db_connection = api.sql_db.db_connect(db_name)
+            db_connection = sql_db.db_connect(db_name)
             if not db_connection:
                 _logger.error(f"Failed to connect to database: {db_name}")
                 raise RuntimeError(f"Cannot connect to database: {db_name}")

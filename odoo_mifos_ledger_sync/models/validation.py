@@ -97,6 +97,7 @@ def get_currency_id(currency_code):
         from odoo import api, SUPERUSER_ID
         from odoo.tools import config
         from odoo.modules import registry
+        from odoo import sql_db
         
         db_name = config.get('db_name')
         if not db_name:
@@ -105,7 +106,7 @@ def get_currency_id(currency_code):
         
         try:
             reg = registry.Registry(db_name)
-            db_connection = api.sql_db.db_connect(db_name)
+            db_connection = sql_db.db_connect(db_name)
             cr = db_connection.cursor()
             env = api.Environment(cr, SUPERUSER_ID, {})
         except Exception as e:
