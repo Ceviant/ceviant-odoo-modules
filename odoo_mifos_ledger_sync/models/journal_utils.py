@@ -15,10 +15,20 @@ def get_env():
     try:
         return request.env
     except RuntimeError:
-        # Outside HTTP context - create proper environment
+        # Outside HTTP context (e.g., from RabbitMQ consumer thread)
         from odoo import api, SUPERUSER_ID
-        registry = api.Environment.manage()
-        return registry.enter()
+        from odoo.tools import config
+        
+        db_name = config.get('db_name')
+        if not db_name:
+            _logger.error("No database configured")
+            raise RuntimeError("Database not configured")
+        
+        # Create proper environment with DB connection
+        registry = api.modules.registry.Registry(db_name)
+        cr = api.sql_db.db_connect(db_name).cursor()
+        env = api.Environment(cr, SUPERUSER_ID, {})
+        return env
 
 
 def get_company_id(env):
