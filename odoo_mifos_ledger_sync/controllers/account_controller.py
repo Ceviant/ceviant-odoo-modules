@@ -10,15 +10,22 @@ _logger = logging.getLogger(__name__)
 class AccountEntryController(http.Controller):
     @http.route('/ledger/accounts', type='http', auth='public', methods=['POST'], csrf=False)
     def handle_account(self):
-        _logger.info("Entering handle_account method")
+        _logger.info("\n" + "="*80)
+        _logger.info(">>> API CALL: POST /ledger/accounts")
+        _logger.info(f"Client IP: {request.httprequest.remote_addr}")
+        _logger.info(f"Headers: {dict(request.httprequest.headers)}")
+        
         raw_data = request.httprequest.data.decode('utf-8')
+        _logger.info(f"Raw Request Body: {raw_data}")
 
         try:
             payload = json.loads(raw_data)
             # Default currency to Odoo's default currency if not provided
             if 'currency' not in payload or not payload['currency']:
-                payload['currency'] = get_default_currency()
-            _logger.info("Received payload: %s", payload)
+                default_currency = get_default_currency()
+                payload['currency'] = default_currency
+                _logger.info(f"Currency not provided, using default: {default_currency}")
+            _logger.info(f"Parsed JSON Payload: {json.dumps(payload, indent=2)}")
         except json.JSONDecodeError as e:
             _logger.error("Invalid JSON payload: %s", e)
             return Response(
@@ -32,7 +39,7 @@ class AccountEntryController(http.Controller):
             )
 
         if not validate_account_entry(payload):
-            _logger.error("Payload validation failed.")
+            _logger.error(f"✗ Validation failed.")
             return Response(
                 json.dumps({
                     "code": 400,
@@ -44,11 +51,13 @@ class AccountEntryController(http.Controller):
             )
 
         try:
+            _logger.info(f"Creating account...")
             batch_ref, error = create_account(payload)
             if error:
                 raise ValueError(error)
+            _logger.info(f"✓ Account created successfully with batch_ref: {batch_ref}")
         except Exception as error:
-            _logger.error("Account creation failed: %s", error)
+            _logger.error(f"✗ Account creation failed: {error}")
             return Response(
                 json.dumps({
                     "code": 400,
@@ -74,14 +83,18 @@ class AccountEntryController(http.Controller):
 
     @http.route('/ledger/accounts', type='http', auth='public', methods=['GET'], csrf=False)
     def get_all_accounts_api(self, **kwargs):
-        _logger.info("Fetching all account records")
+        _logger.info("\n" + "="*80)
+        _logger.info(">>> API CALL: GET /ledger/accounts")
+        _logger.info(f"Client IP: {request.httprequest.remote_addr}")
+        _logger.info(f"Fetching all account records...")
 
         try:
             accounts = get_account_records(request.env)
             account_data = get_account_data(request.env, accounts)
+            _logger.info(f"✓ Successfully retrieved {len(account_data) if isinstance(account_data, list) else len(account_data.get('data', []))} accounts")
             _logger.info(f"Account data: {account_data}")
         except Exception as error:
-            _logger.error("Error fetching account data: %s", error)
+            _logger.error(f"✗ Error fetching account data: {error}")
             return Response(
                 json.dumps({
                     'code': 500,

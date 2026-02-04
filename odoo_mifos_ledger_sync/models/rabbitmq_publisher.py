@@ -35,13 +35,23 @@ def get_rabbitmq_connection():
 
 def publish_message_to_rabbitmq(queue_name, payload):
     retries = 0
+    logging.info(f"=== RABBITMQ PUBLISH START ===")
+    logging.info(f"Queue Name: {queue_name}")
+    logging.info(f"Payload: {json.dumps(payload, indent=2)}")
+    
     while retries < MAX_PUBLISH_RETRIES:
         try:
+            logging.info(f"Attempting to connect to RabbitMQ (attempt {retries + 1}/{MAX_PUBLISH_RETRIES})")
             connection_parameters = get_rabbitmq_connection()
+            logging.info(f"Connection Parameters - Host: {connection_parameters.host}, Port: {connection_parameters.port}, VHost: {connection_parameters.virtual_host}")
+            
             connection = pika.BlockingConnection(connection_parameters)
+            logging.info(f"Connected to RabbitMQ successfully")
             channel = connection.channel()
+            logging.info(f"Channel created")
 
             channel.queue_declare(queue=queue_name, durable=True)
+            logging.info(f"Queue '{queue_name}' declared")
 
             batch_ref = generate_batch_reference()
             message = {
@@ -56,16 +66,24 @@ def publish_message_to_rabbitmq(queue_name, payload):
                 properties=pika.BasicProperties(delivery_mode=2)
             )
 
-            logging.info(f"Message published to {queue_name} with batch_ref {batch_ref}")
+            logging.info(f"✓ Message published to queue '{queue_name}' with batch_ref '{batch_ref}'")
+            logging.info(f"=== RABBITMQ PUBLISH SUCCESS ===")
             connection.close()
             return batch_ref
 
         except pika.exceptions.AMQPError as e:
             retries += 1
-            logging.error(f"Publish attempt {retries} failed: {e}")
+            logging.error(f"✗ Publish attempt {retries} failed: {type(e).__name__} - {e}")
+            logging.error(f"Retrying in {PUBLISH_RETRY_DELAY} seconds...")
+            time.sleep(PUBLISH_RETRY_DELAY)
+        except Exception as e:
+            retries += 1
+            logging.error(f"✗ Unexpected error on attempt {retries}: {type(e).__name__} - {e}")
+            logging.error(f"Retrying in {PUBLISH_RETRY_DELAY} seconds...")
             time.sleep(PUBLISH_RETRY_DELAY)
 
-    logging.error(f"Failed to publish to RabbitMQ after {MAX_PUBLISH_RETRIES} attempts.")
+    logging.error(f"✗ FAILED to publish to RabbitMQ after {MAX_PUBLISH_RETRIES} attempts.")
+    logging.error(f"=== RABBITMQ PUBLISH FAILED ===")
     return None
 
 def publish_account_entry_to_rabbitmq(payload):
