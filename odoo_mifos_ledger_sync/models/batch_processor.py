@@ -69,6 +69,7 @@ MAX_RETRIES = 3  # Reduced from 5
 RETRY_BACKOFF = [0, 1, 3]  # Exponential backoff (0s, 1s, 3s)
 PREFETCH_COUNT = 10  # Increased from 1 for better throughput
 THREAD_POOL_SIZE = 5  # Process 5 messages in parallel
+NUM_CONSUMERS = 2  # Number of concurrent consumers
 
 # Handler mapping for faster lookups
 HANDLER_MAP = {
@@ -121,7 +122,7 @@ class BatchProcessor(models.Model):
         return cls._channel
 
     def process_message(self, ch, method, body, retry_count=0):
-        """Process single message with optimized error handling."""
+        """Process single message with optimized error handling and detailed logging."""
         batch_ref = None
         try:
             message = json.loads(body)
@@ -129,42 +130,91 @@ class BatchProcessor(models.Model):
             payload = message.get('payload')
             queue_type = method.routing_key
             
+            _logger.info(f"\n{'='*80}")
+            _logger.info(f">>> DEQUEUE EVENT")
+            _logger.info(f"Queue: {queue_type}")
+            _logger.info(f"Batch Reference: {batch_ref}")
+            _logger.info(f"Delivery Tag: {method.delivery_tag}")
+            _logger.info(f"Retry Attempt: {retry_count + 1}/{MAX_RETRIES + 1}")
+            _logger.info(f"Payload: {json.dumps(payload, indent=2) if payload else 'None'}")
+            
             if queue_type not in HANDLER_MAP:
-                _logger.warning(f"Unknown queue type: {queue_type} batch {batch_ref}")
+                _logger.error(f"✗ Unknown queue type: {queue_type} batch {batch_ref}")
+                _logger.error(f"Available queues: {list(HANDLER_MAP.keys())}")
                 ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                _logger.info(f"Message REJECTED (unknown queue type)")
+                _logger.info(f"{'='*80}\n")
                 return
             
             label, handler = HANDLER_MAP[queue_type]
-            _logger.debug(f"{label} batch {batch_ref}")
-            if handler(payload):
-                _logger.info(f"✓ batch {batch_ref} processed")
+            _logger.info(f"Processing: {label}")
+            
+            handler_result = handler(payload)
+            if handler_result:
+                _logger.info(f"✓ Handler executed successfully for batch {batch_ref}")
                 ch.basic_ack(delivery_tag=method.delivery_tag)
+                _logger.info(f"Message ACKNOWLEDGED and removed from queue")
+                _logger.info(f"<<< DEQUEUE SUCCESS")
+                _logger.info(f"{'='*80}\n")
             else:
-                raise Exception(f"{label} failed")
+                _logger.error(f"✗ Handler returned false: {label} failed for batch {batch_ref}")
+                raise Exception(f"{label} failed - handler returned false")
                 
         except json.JSONDecodeError as e:
-            _logger.error(f"JSON error batch {batch_ref}: {e}")
+            _logger.error(f"✗ JSON Decode Error for batch {batch_ref}: {str(e)}")
+            _logger.error(f"Raw Body: {body[:200]}")
             self.retry_or_fail(ch, method, body, retry_count)
         except Exception as e:
-            _logger.error(f"Error batch {batch_ref}: {e}")
+            _logger.error(f"✗ Processing Error for batch {batch_ref}: {type(e).__name__} - {str(e)}")
+            import traceback
+            _logger.error(f"Traceback: {traceback.format_exc()}")
             self.retry_or_fail(ch, method, body, retry_count)
 
     def retry_or_fail(self, ch, method, body, retry_count=0):
-        """Retry with exponential backoff or move to failure queue."""
+        """Retry with exponential backoff or move to failure queue with detailed logging."""
+        try:
+            batch_ref = json.loads(body).get('batch_ref')
+            queue_type = method.routing_key
+        except:
+            batch_ref = 'UNKNOWN'
+            queue_type = 'UNKNOWN'
+            
         if retry_count < MAX_RETRIES:
             delay = RETRY_BACKOFF[retry_count]
-            batch_ref = json.loads(body).get('batch_ref')
-            _logger.warning(f"Retry {retry_count+1}/{MAX_RETRIES} batch {batch_ref} (wait {delay}s)")
+            _logger.warning(f"✗ RETRY SCHEDULED")
+            _logger.warning(f"Batch: {batch_ref}")
+            _logger.warning(f"Attempt: {retry_count + 1}/{MAX_RETRIES}")
+            _logger.warning(f"Backoff Delay: {delay}s")
+            _logger.warning(f"Next retry in {delay} seconds...")
+            _logger.info(f"{'='*80}\n")
             time.sleep(delay)
             self.process_message(ch, method, body, retry_count + 1)
         else:
-            batch_ref = json.loads(body).get('batch_ref')
-            queue_type = method.routing_key
             failure_queue = FAILURE_QUEUE_MAP.get(queue_type)
+            _logger.error(f"✗ MAX RETRIES EXCEEDED")
+            _logger.error(f"Batch: {batch_ref}")
+            _logger.error(f"Queue: {queue_type}")
+            _logger.error(f"Attempts Made: {MAX_RETRIES + 1}")
+            
             if failure_queue:
-                _logger.error(f"Failed batch {batch_ref} → {failure_queue}")
-                ch.basic_publish(exchange='', routing_key=failure_queue, body=body)
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+                _logger.error(f"Moving to Failure Queue: {failure_queue}")
+                try:
+                    ch.basic_publish(exchange='', routing_key=failure_queue, body=body, properties=pika.BasicProperties(delivery_mode=2))
+                    _logger.error(f"✓ Message moved to failure queue successfully")
+                except Exception as e:
+                    _logger.error(f"✗ Failed to move message to failure queue: {e}")
+            else:
+                _logger.error(f"✗ No failure queue configured for {queue_type}")
+            
+            # Acknowledge to remove from original queue
+            try:
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                _logger.error(f"Message ACKNOWLEDGED and removed from original queue")
+            except Exception as e:
+                _logger.error(f"✗ Failed to acknowledge message: {e}")
+            
+            _logger.error(f"<<< DEQUEUE FAILED (exhausted retries)")
+            _logger.error(f"{'='*80}\n")
 
     def fetch_and_process_messages(self):
         """Continuous consumer with thread pool for parallel processing."""
@@ -178,14 +228,25 @@ class BatchProcessor(models.Model):
                 # Process in thread pool (non-blocking)
                 executor.submit(self.process_message, ch, method, body, 0)
             
-            for queue_name in ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']:
+            queues = ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']
+            for queue_name in queues:
                 channel.basic_consume(queue=queue_name, on_message_callback=callback)
             
-            _logger.info(f"🚀 Consumer ready: prefetch={PREFETCH_COUNT} workers={THREAD_POOL_SIZE} retry_limit={MAX_RETRIES}")
+            _logger.info(f"\n{'='*80}")
+            _logger.info(f"🚀 CONSUMER STARTED")
+            _logger.info(f"Number of Consumers: {NUM_CONSUMERS}")
+            _logger.info(f"Thread Pool Size: {THREAD_POOL_SIZE} workers")
+            _logger.info(f"Prefetch Count: {PREFETCH_COUNT} messages/consumer")
+            _logger.info(f"Max Retries: {MAX_RETRIES}")
+            _logger.info(f"Listening on Queues: {', '.join(queues)}")
+            _logger.info(f"Status: READY to consume messages")
+            _logger.info(f"{'='*80}\n")
             channel.start_consuming()
             
         except Exception as e:
-            _logger.critical(f"Consumer fatal error: {e}", exc_info=True)
+            _logger.critical(f"\n✗ CONSUMER FATAL ERROR: {type(e).__name__} - {str(e)}")
+            _logger.critical(f"Traceback: ", exc_info=True)
+            _logger.critical(f"Consumer will attempt to reconnect...")
             raise
 
     @staticmethod
@@ -202,8 +263,21 @@ class BatchProcessor(models.Model):
 
     @api.model
     def run_batch_processor(self):
-        """Run the batch processor as background service."""
-        # Start consumer in daemon thread
-        consumer_thread = Thread(target=self.fetch_and_process_messages, daemon=True)
-        consumer_thread.start()
-        _logger.info("Batch processor started")
+        """Run the batch processor as background service with multiple consumers."""
+        _logger.info(f"\n{'='*80}")
+        _logger.info(f"Initializing Batch Processor with {NUM_CONSUMERS} consumer(s)...")
+        
+        # Start multiple consumers in daemon threads
+        consumer_threads = []
+        for i in range(NUM_CONSUMERS):
+            consumer_thread = Thread(
+                target=self.fetch_and_process_messages,
+                daemon=True,
+                name=f"RabbitMQConsumer-{i+1}"
+            )
+            consumer_thread.start()
+            consumer_threads.append(consumer_thread)
+            _logger.info(f"Started Consumer {i+1}/{NUM_CONSUMERS}")
+        
+        _logger.info(f"All {NUM_CONSUMERS} consumers started successfully")
+        _logger.info(f"{'='*80}\n")
