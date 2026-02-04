@@ -18,11 +18,11 @@ def generate_batch_reference(length=6):
     return f'resp-{random_digits}'
 
 def get_rabbitmq_connection():
-    host = os.getenv("RABBITMQ_HOST")
-    port = os.getenv("RABBITMQ_PORT")
-    virtual_host = os.getenv("RABBITMQ_VHOST")
-    username = os.getenv("RABBITMQ_USERNAME")
-    password = os.getenv("RABBITMQ_PASSWORD")
+    host = os.getenv("RABBITMQ_HOST", "rabbitmq")
+    port = os.getenv("RABBITMQ_PORT", "5672")
+    virtual_host = os.getenv("RABBITMQ_VHOST", "/")
+    username = os.getenv("RABBITMQ_USERNAME", "admin")
+    password = os.getenv("RABBITMQ_PASSWORD", "admin")
 
     try:
         return pika.ConnectionParameters(
