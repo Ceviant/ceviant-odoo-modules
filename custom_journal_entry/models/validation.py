@@ -100,35 +100,39 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # First try to find by 'code' field (standard Odoo field for currency code)
-        currency = env['res.currency'].sudo().search([('code', '=', currency_code.upper())], limit=1)
-        if currency:
-            _logger.info(f"Found currency {currency_code} with ID {currency.id} using 'code'")
-            return currency.id
+        # Get all currencies and find the one with matching code
+        currencies = env['res.currency'].sudo().search([])
+        for currency in currencies:
+            # Try to match by 'code' or 'name' or other possible fields
+            try:
+                if currency.code == currency_code.upper():
+                    _logger.info(f"Found currency {currency_code} with ID {currency.id} using 'code'")
+                    return currency.id
+            except AttributeError:
+                pass
+            try:
+                if currency.name == currency_code.upper():
+                    _logger.info(f"Found currency {currency_code} with ID {currency.id} using 'name'")
+                    return currency.id
+            except AttributeError:
+                pass
         
-        # If not found, try 'name' field (in case of older version or customization)
-        try:
-            currency = env['res.currency'].sudo().search([('name', '=', currency_code.upper())], limit=1)
-            if currency:
-                _logger.info(f"Found currency {currency_code} with ID {currency.id} using 'name'")
-                return currency.id
-        except Exception:
-            pass
-        
-        # If still not found, try to fallback to USD
-        _logger.warning(f"Currency {currency_code} not found, trying fallback to USD")
-        currency = env['res.currency'].sudo().search([('code', '=', 'USD')], limit=1)
-        if currency:
-            _logger.info(f"Using fallback currency USD with ID {currency.id}")
-            return currency.id
-        
-        try:
-            currency = env['res.currency'].sudo().search([('name', '=', 'USD')], limit=1)
-            if currency:
-                _logger.info(f"Using fallback currency USD with ID {currency.id}")
-                return currency.id
-        except Exception:
-            pass
+        # If not found, try fallback to default currency
+        _logger.warning(f"Currency {currency_code} not found, trying fallback to default currency")
+        default_code = get_default_currency()
+        for currency in currencies:
+            try:
+                if currency.code == default_code.upper():
+                    _logger.info(f"Using fallback currency {default_code} with ID {currency.id}")
+                    return currency.id
+            except AttributeError:
+                pass
+            try:
+                if currency.name == default_code.upper():
+                    _logger.info(f"Using fallback currency {default_code} with ID {currency.id}")
+                    return currency.id
+            except AttributeError:
+                pass
         
         _logger.warning(f"Currency {currency_code} and fallback USD not found")
         return None
