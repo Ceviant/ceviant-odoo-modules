@@ -100,12 +100,11 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # Get all currencies and find the one with matching code
-        currencies = env['res.currency'].sudo().search([])
-        for currency in currencies:
-            if currency.code == currency_code:
-                _logger.info(f"Found currency {currency_code} with ID {currency.id}")
-                return currency.id
+        # Search for currency by code, bypassing active filter
+        currency = env['res.currency'].sudo().with_context(active_test=False).search([('name', '=', currency_code)], limit=1)
+        if currency:
+            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
+            return currency.id
 
         _logger.warning(f"Currency {currency_code} not found")
         return None
