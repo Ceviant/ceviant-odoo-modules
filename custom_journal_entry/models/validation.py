@@ -100,21 +100,47 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+        # Try with 'name' first (standard in Odoo 17)
+        currency = env['res.currency'].sudo().search([('name', '=', currency_code.upper())], limit=1)
         if currency:
             _logger.info(f"Found currency {currency_code} with ID {currency.id}")
             return currency.id
-        _logger.warning(f"Currency {currency_code} not found")
-        return None
+    except ValueError as e:
+        if "Invalid field" in str(e):
+            _logger.warning(f"Field 'name' invalid for res.currency, trying 'code': {e}")
+            try:
+                # Fallback to 'code' (possibly in Odoo 18 or custom setups)
+                currency = env['res.currency'].sudo().search([('code', '=', currency_code.upper())], limit=1)
+                if currency:
+                    _logger.info(f"Found currency {currency_code} with ID {currency.id} using 'code'")
+                    return currency.id
+            except Exception as e2:
+                _logger.error(f"Fallback currency lookup also failed for {currency_code}: {e2}")
+        else:
+            _logger.error(f"Currency lookup failed for {currency_code}: {e}")
+            import traceback
+            _logger.error(f"Traceback: {traceback.format_exc()}")
     except Exception as e:
         _logger.error(f"Currency lookup failed for {currency_code}: {e}")
         import traceback
         _logger.error(f"Traceback: {traceback.format_exc()}")
-        return None
+    
+    _logger.warning(f"Currency {currency_code} not found")
+    return None
 
 
 def get_available_currencies():
     """Get list of all available currencies in the system."""
     env = request.env
     currencies = env['res.currency'].sudo().search([])
-    return [{'id': curr.id, 'code': curr.name, 'symbol': curr.symbol} for curr in currencies]
+    result = []
+    for curr in currencies:
+        try:
+            code = curr.name
+        except AttributeError:
+            try:
+                code = curr.code
+            except AttributeError:
+                code = ''
+        result.append({'id': curr.id, 'code': code, 'symbol': curr.symbol})
+    return result
