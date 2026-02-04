@@ -90,12 +90,37 @@ def validate_account_ids(env, account_ids):
 
 def get_currency_id(currency_code):
     """Get the currency ID from the currency code."""
-    env = request.env
-    currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
-    if currency:
-        return currency.id
-    else:
-        _logger.error(f"Currency not found for code: {currency_code}")
+    try:
+        env = request.env
+    except (RuntimeError, AttributeError):
+        # Outside HTTP context (e.g., from RabbitMQ consumer thread)
+        from odoo import api, SUPERUSER_ID
+        from odoo.tools import config
+        from odoo.modules import registry
+        
+        db_name = config.get('db_name')
+        if not db_name:
+            _logger.error("No database configured")
+            return None
+        
+        try:
+            reg = registry.Registry(db_name)
+            db_connection = api.sql_db.db_connect(db_name)
+            cr = db_connection.cursor()
+            env = api.Environment(cr, SUPERUSER_ID, {})
+        except Exception as e:
+            _logger.error(f"Failed to get environment for currency lookup: {e}")
+            return None
+    
+    try:
+        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+        if currency:
+            return currency.id
+        else:
+            _logger.error(f"Currency not found for code: {currency_code}")
+            return None
+    except Exception as e:
+        _logger.error(f"Error looking up currency {currency_code}: {e}")
         return None
 
 

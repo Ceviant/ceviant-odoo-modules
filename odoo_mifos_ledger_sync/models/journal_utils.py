@@ -14,21 +14,46 @@ def get_env():
     """Get Odoo environment with proper database and user context."""
     try:
         return request.env
-    except RuntimeError:
+    except (RuntimeError, AttributeError):
         # Outside HTTP context (e.g., from RabbitMQ consumer thread)
         from odoo import api, SUPERUSER_ID
         from odoo.tools import config
+        from odoo.modules import registry
         
         db_name = config.get('db_name')
         if not db_name:
             _logger.error("No database configured")
             raise RuntimeError("Database not configured")
         
-        # Create proper environment with DB connection
-        registry = api.modules.registry.Registry(db_name)
-        cr = api.sql_db.db_connect(db_name).cursor()
-        env = api.Environment(cr, SUPERUSER_ID, {})
-        return env
+        try:
+            # Get the registry for the database
+            reg = registry.Registry(db_name)
+            
+            # Get database connection
+            db_connection = api.sql_db.db_connect(db_name)
+            if not db_connection:
+                _logger.error(f"Failed to connect to database: {db_name}")
+                raise RuntimeError(f"Cannot connect to database: {db_name}")
+            
+            # Create cursor
+            cr = db_connection.cursor()
+            if not cr:
+                _logger.error(f"Failed to create database cursor for: {db_name}")
+                raise RuntimeError(f"Cannot create cursor for database: {db_name}")
+            
+            # Create environment
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            if not env:
+                _logger.error("Failed to create Odoo environment")
+                raise RuntimeError("Cannot create Odoo environment")
+            
+            _logger.info(f"✓ Successfully created environment for database: {db_name}")
+            return env
+        except Exception as e:
+            _logger.error(f"Failed to initialize Odoo environment: {type(e).__name__}: {str(e)}")
+            import traceback
+            _logger.error(f"Traceback: {traceback.format_exc()}")
+            raise RuntimeError(f"Cannot create environment: {str(e)}")
 
 
 def get_company_id(env):
@@ -107,6 +132,9 @@ def process_transaction(payload):
     try:
         _logger.info(f"Step 1: Getting environment...")
         env = get_env()
+        if not env:
+            _logger.error(f"✗ Environment is None")
+            return False
         _logger.info(f"✓ Got environment")
         
         _logger.info(f"Step 2: Validating payload...")
@@ -151,13 +179,17 @@ def process_transaction(payload):
         
         _logger.info(f"Step 7: Checking for duplicate transaction...")
         trans_ref = payload.get("transactionReference")
-        if env["account.move"].search([("ref", "=", trans_ref)]):
+        existing = env["account.move"].search([("ref", "=", trans_ref)])
+        if existing:
             _logger.error(f"✗ Duplicate transaction: {trans_ref}")
             return False
         _logger.info(f"✓ No duplicate found")
         
         _logger.info(f"Step 8: Getting company ID...")
         company_id = get_company_id(env)
+        if not company_id:
+            _logger.error("✗ Failed to get company ID")
+            return False
         _logger.info(f"✓ Company ID: {company_id}")
         
         _logger.info(f"Step 9: Getting/creating journal...")
@@ -169,6 +201,9 @@ def process_transaction(payload):
         
         _logger.info(f"Step 10: Preparing line items...")
         line_ids = _prepare_line_ids(payload, valid_accounts)
+        if not line_ids:
+            _logger.error("✗ No valid line items prepared")
+            return False
         _logger.info(f"✓ Prepared {len(line_ids)} lines")
         
         _logger.info(f"Step 11: Creating account.move...")
@@ -181,6 +216,9 @@ def process_transaction(payload):
             "currency_id": currency_id,
             "line_ids": line_ids,
         })
+        if not move:
+            _logger.error("✗ Failed to create account.move")
+            return False
         _logger.info(f"✓ Move {move.id} created")
         
         _logger.info(f"Step 12: Creating custom.journal.entry...")
@@ -194,6 +232,9 @@ def process_transaction(payload):
             "account_move_id": move.id,
             "currency_id": currency_id,
         })
+        if not custom_entry:
+            _logger.error("✗ Failed to create custom.journal.entry")
+            return False
         _logger.info(f"✓ Custom entry {custom_entry.id} created")
         
         _logger.info(f"Step 13: Creating custom.journal.entry.line records...")
@@ -225,99 +266,112 @@ def process_transaction(payload):
 
 def update_journal_entry_in_database(payload):
     """Update journal entry with batch operations and no unnecessary logging."""
-    is_valid, error = validate_journal_entry(payload)
-    if not is_valid:
-        _logger.error(f"Validation failed: {error}")
-        return False
-    
-    trans_date = _parse_transaction_date(payload.get('transactionDate'))
-    if not trans_date:
-        _logger.error(f"Invalid date: {payload.get('transactionDate')}")
-        return False
-    
-    env = get_env()
-    trans_ref = payload.get('transactionReference')
-    
-    # Find existing entry
-    existing_entry = env['account.move'].search([('ref', '=', trans_ref)], limit=1)
-    if not existing_entry:
-        _logger.error(f"Transaction not found: {trans_ref}")
-        return False
-    
-    # Verify balance
-    total_debits = sum(d.get('amount', 0) for d in payload.get('debits', []))
-    total_credits = sum(c.get('amount', 0) for c in payload.get('credits', []))
-    
-    if total_debits != total_credits:
-        _logger.error(f"Unbalanced: debits={total_debits} credits={total_credits}")
-        return False
-    
     try:
-        # Batch update Odoo entry
-        existing_entry.write({
-            'date': trans_date,
-            'ref': trans_ref,
-            'narration': payload.get('comments'),
-            'currency_id': get_currency_id(payload.get('currencyCode')),
-        })
+        is_valid, error = validate_journal_entry(payload)
+        if not is_valid:
+            _logger.error(f"Validation failed: {error}")
+            return False
         
-        # Batch delete and recreate lines (faster than update)
-        existing_entry.line_ids.unlink()
+        trans_date = _parse_transaction_date(payload.get('transactionDate'))
+        if not trans_date:
+            _logger.error(f"Invalid date: {payload.get('transactionDate')}")
+            return False
         
-        # Prepare all new lines at once
-        new_lines = []
-        for credit in payload.get('credits', []):
-            new_lines.append((0, 0, {
-                'account_id': credit.get('glAccountId'),
-                'credit': credit.get('amount'),
-                'debit': 0
-            }))
-        for debit in payload.get('debits', []):
-            new_lines.append((0, 0, {
-                'account_id': debit.get('glAccountId'),
-                'credit': 0,
-                'debit': debit.get('amount')
-            }))
+        env = get_env()
+        if not env:
+            _logger.error("Failed to get environment")
+            return False
         
-        # Create all at once
-        if new_lines:
-            existing_entry.line_ids = new_lines
+        trans_ref = payload.get('transactionReference')
         
-        # Update custom entry (batch)
-        custom_entry = env['custom.journal.entry'].search([('ref', '=', trans_ref)], limit=1)
-        if custom_entry:
-            custom_entry.write({
-                "branch_id": payload.get("branchId"),
-                "transaction_date": trans_date,
-                "time_stamp": payload.get("timeStamp"),
-                "currency_id": get_currency_id(payload.get("currencyCode")),
+        # Find existing entry
+        existing_entry = env['account.move'].search([('ref', '=', trans_ref)], limit=1)
+        if not existing_entry:
+            _logger.error(f"Transaction not found: {trans_ref}")
+            return False
+        
+        # Verify balance
+        total_debits = sum(d.get('amount', 0) for d in payload.get('debits', []))
+        total_credits = sum(c.get('amount', 0) for c in payload.get('credits', []))
+        
+        if total_debits != total_credits:
+            _logger.error(f"Unbalanced: debits={total_debits} credits={total_credits}")
+            return False
+        
+        try:
+            # Batch update Odoo entry
+            existing_entry.write({
+                'date': trans_date,
+                'ref': trans_ref,
+                'narration': payload.get('comments'),
+                'currency_id': get_currency_id(payload.get('currencyCode')),
             })
             
-            # Batch delete and recreate custom lines
-            custom_entry.line_ids.unlink()
+            # Batch delete and recreate lines (faster than update)
+            existing_entry.line_ids.unlink()
             
-            custom_lines = []
+            # Prepare all new lines at once
+            new_lines = []
             for credit in payload.get('credits', []):
-                custom_lines.append({
-                    'journal_entry_id': custom_entry.id,
-                    'gl_account_id': credit.get('glAccountId'),
-                    'amount': credit.get('amount'),
-                    'type': 'credit'
-                })
+                new_lines.append((0, 0, {
+                    'account_id': credit.get('glAccountId'),
+                    'credit': credit.get('amount'),
+                    'debit': 0
+                }))
             for debit in payload.get('debits', []):
-                custom_lines.append({
-                    'journal_entry_id': custom_entry.id,
-                    'gl_account_id': debit.get('glAccountId'),
-                    'amount': debit.get('amount'),
-                    'type': 'debit'
-                })
+                new_lines.append((0, 0, {
+                    'account_id': debit.get('glAccountId'),
+                    'credit': 0,
+                    'debit': debit.get('amount')
+                }))
             
-            if custom_lines:
-                env['custom.journal.entry.line'].create(custom_lines)
-        
-        _logger.info(f"✓ Updated {trans_ref}")
-        return True
-        
+            # Create all at once
+            if new_lines:
+                existing_entry.line_ids = new_lines
+            
+            # Update custom entry (batch)
+            custom_entry = env['custom.journal.entry'].search([('transaction_reference', '=', trans_ref)], limit=1)
+            if custom_entry:
+                custom_entry.write({
+                    "branch_id": payload.get("branchId"),
+                    "transaction_date": trans_date,
+                    "time_stamp": payload.get("timeStamp"),
+                    "currency_id": get_currency_id(payload.get("currencyCode")),
+                })
+                
+                # Batch delete and recreate custom lines
+                custom_entry.line_ids.unlink()
+                
+                custom_lines = []
+                for credit in payload.get('credits', []):
+                    custom_lines.append({
+                        'journal_entry_id': custom_entry.id,
+                        'gl_account_id': credit.get('glAccountId'),
+                        'amount': credit.get('amount'),
+                        'type': 'credit'
+                    })
+                for debit in payload.get('debits', []):
+                    custom_lines.append({
+                        'journal_entry_id': custom_entry.id,
+                        'gl_account_id': debit.get('glAccountId'),
+                        'amount': debit.get('amount'),
+                        'type': 'debit'
+                    })
+                
+                if custom_lines:
+                    env['custom.journal.entry.line'].create(custom_lines)
+            
+            _logger.info(f"✓ Updated {trans_ref}")
+            return True
+            
+        except Exception as e:
+            _logger.error(f"Update failed: {type(e).__name__}: {str(e)}")
+            import traceback
+            _logger.error(f"Traceback: {traceback.format_exc()}")
+            return False
+            
     except Exception as e:
-        _logger.error(f"Update failed: {e}")
+        _logger.error(f"Update function failed: {type(e).__name__}: {str(e)}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
         return False
