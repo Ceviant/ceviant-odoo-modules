@@ -114,12 +114,29 @@ def get_currency_id(currency_code):
             return None
     
     try:
-        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
-        if currency:
-            return currency.id
-        else:
-            _logger.error(f"Currency not found for code: {currency_code}")
-            return None
+        # Try searching by code field first
+        try:
+            currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
+            if currency:
+                return currency.id
+        except Exception as code_error:
+            _logger.warning(f"Code field search failed: {code_error}. Trying name field.")
+        
+        # Fallback to searching by name field
+        try:
+            currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+            if currency:
+                return currency.id
+        except Exception as name_error:
+            _logger.warning(f"Name field search failed: {name_error}. Listing available currencies.")
+        
+        # Log all available currencies for debugging
+        _logger.error(f"Currency {currency_code} not found. Available currencies:")
+        all_currencies = env['res.currency'].sudo().search([])
+        for curr in all_currencies:
+            _logger.error(f"  - ID: {curr.id}, Name: {getattr(curr, 'name', 'N/A')}, Code: {getattr(curr, 'code', 'N/A')}")
+        
+        return None
     except Exception as e:
         _logger.error(f"Error looking up currency {currency_code}: {e}")
         return None
