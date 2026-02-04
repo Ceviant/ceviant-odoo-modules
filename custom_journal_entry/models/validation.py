@@ -114,7 +114,7 @@ def get_currency_id(currency_code):
             return None
     
     try:
-        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
         if currency:
             return currency.id
         else:
