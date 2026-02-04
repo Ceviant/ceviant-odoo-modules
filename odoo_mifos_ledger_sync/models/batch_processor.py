@@ -88,25 +88,33 @@ class BatchProcessor(models.Model):
     _name = 'custom_journal_entry.batch_processor'
     _connection = None
     _channel = None
+    _consumer_active = False
     _lock = threading.Lock()
 
     @classmethod
     def get_connection(cls):
         """Get or create RabbitMQ connection (singleton pattern)."""
         if cls._connection is None or cls._connection.is_closed:
-            host = os.getenv("RABBITMQ_HOST", "rabbitmq")
-            port = int(os.getenv("RABBITMQ_PORT", "5672"))
-            virtual_host = os.getenv("RABBITMQ_VHOST", "/")
-            username = os.getenv("RABBITMQ_USERNAME", "guest")
-            password = os.getenv("RABBITMQ_PASSWORD", "guest")
-            
-            params = pika.ConnectionParameters(
-                host=host, port=port, virtual_host=virtual_host,
-                credentials=pika.PlainCredentials(username, password),
-                connection_attempts=3, retry_delay=2,
-                socket_options=[(1, 9, 1)]  # TCP_NODELAY for lower latency
-            )
-            cls._connection = pika.BlockingConnection(params)
+            try:
+                host = os.getenv("RABBITMQ_HOST", "rabbitmq")
+                port = int(os.getenv("RABBITMQ_PORT", "5672"))
+                virtual_host = os.getenv("RABBITMQ_VHOST", "/")
+                username = os.getenv("RABBITMQ_USERNAME", "admin")
+                password = os.getenv("RABBITMQ_PASSWORD", "admin")
+                
+                _logger.info(f"Connecting to RabbitMQ: {host}:{port} (vhost: {virtual_host})")
+                
+                params = pika.ConnectionParameters(
+                    host=host, port=port, virtual_host=virtual_host,
+                    credentials=pika.PlainCredentials(username, password),
+                    connection_attempts=5, retry_delay=2,
+                    socket_options=[(1, 9, 1)]  # TCP_NODELAY for lower latency
+                )
+                cls._connection = pika.BlockingConnection(params)
+                _logger.info(f"✓ Connected to RabbitMQ successfully")
+            except Exception as e:
+                _logger.error(f"✗ Failed to connect to RabbitMQ: {e}")
+                raise
         return cls._connection
 
     @classmethod
@@ -217,37 +225,63 @@ class BatchProcessor(models.Model):
             _logger.error(f"{'='*80}\n")
 
     def fetch_and_process_messages(self):
-        """Continuous consumer with thread pool for parallel processing."""
-        try:
-            channel = self.get_channel()
-            executor = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
-            
-            def callback(ch, method, properties, body):
-                # Set queue type on method for handler routing
-                method.routing_key = method.routing_key or self._infer_queue_type(body)
-                # Process in thread pool (non-blocking)
-                executor.submit(self.process_message, ch, method, body, 0)
-            
-            queues = ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']
-            for queue_name in queues:
-                channel.basic_consume(queue=queue_name, on_message_callback=callback)
-            
-            _logger.info(f"\n{'='*80}")
-            _logger.info(f"🚀 CONSUMER STARTED")
-            _logger.info(f"Number of Consumers: {NUM_CONSUMERS}")
-            _logger.info(f"Thread Pool Size: {THREAD_POOL_SIZE} workers")
-            _logger.info(f"Prefetch Count: {PREFETCH_COUNT} messages/consumer")
-            _logger.info(f"Max Retries: {MAX_RETRIES}")
-            _logger.info(f"Listening on Queues: {', '.join(queues)}")
-            _logger.info(f"Status: READY to consume messages")
-            _logger.info(f"{'='*80}\n")
-            channel.start_consuming()
-            
-        except Exception as e:
-            _logger.critical(f"\n✗ CONSUMER FATAL ERROR: {type(e).__name__} - {str(e)}")
-            _logger.critical(f"Traceback: ", exc_info=True)
-            _logger.critical(f"Consumer will attempt to reconnect...")
-            raise
+        """Continuous consumer with thread pool for parallel processing and auto-reconnection."""
+        consumer_id = threading.current_thread().name
+        _logger.info(f"\n{consumer_id} - Starting fetch_and_process_messages")
+        
+        while True:  # Keep running indefinitely
+            try:
+                _logger.info(f"{consumer_id} - Initializing consumer...")
+                channel = self.get_channel()
+                executor = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
+                
+                def callback(ch, method, properties, body):
+                    # Set queue type on method for handler routing
+                    method.routing_key = method.routing_key or self._infer_queue_type(body)
+                    # Process in thread pool (non-blocking)
+                    executor.submit(self.process_message, ch, method, body, 0)
+                
+                queues = ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']
+                for queue_name in queues:
+                    channel.basic_consume(queue=queue_name, on_message_callback=callback)
+                
+                _logger.info(f"\n{'='*80}")
+                _logger.info(f"🚀 {consumer_id} STARTED")
+                _logger.info(f"Thread Pool Size: {THREAD_POOL_SIZE} workers")
+                _logger.info(f"Prefetch Count: {PREFETCH_COUNT} messages")
+                _logger.info(f"Max Retries: {MAX_RETRIES}")
+                _logger.info(f"Listening on Queues: {', '.join(queues)}")
+                _logger.info(f"Status: CONSUMING MESSAGES")
+                _logger.info(f"{'='*80}\n")
+                
+                # This blocks until connection drops
+                channel.start_consuming()
+                
+            except pika.exceptions.ConnectionClosedByBroker:
+                _logger.warning(f"{consumer_id} - Connection closed by broker, reconnecting in 5s...")
+                time.sleep(5)
+                self._channel = None
+                self._connection = None
+                
+            except pika.exceptions.AMQPChannelError as e:
+                _logger.error(f"{consumer_id} - AMQP Channel Error: {e}, reconnecting in 5s...")
+                time.sleep(5)
+                self._channel = None
+                self._connection = None
+                
+            except pika.exceptions.AMQPConnectionError as e:
+                _logger.error(f"{consumer_id} - AMQP Connection Error: {e}, reconnecting in 5s...")
+                time.sleep(5)
+                self._channel = None
+                self._connection = None
+                
+            except Exception as e:
+                _logger.critical(f"\n{consumer_id} - FATAL ERROR: {type(e).__name__} - {str(e)}")
+                _logger.critical(f"Traceback: ", exc_info=True)
+                _logger.critical(f"Reconnecting in 10s...")
+                time.sleep(10)
+                self._channel = None
+                self._connection = None
 
     @staticmethod
     def _infer_queue_type(body):
@@ -264,20 +298,38 @@ class BatchProcessor(models.Model):
     @api.model
     def run_batch_processor(self):
         """Run the batch processor as background service with multiple consumers."""
-        _logger.info(f"\n{'='*80}")
-        _logger.info(f"Initializing Batch Processor with {NUM_CONSUMERS} consumer(s)...")
+        with self._lock:
+            # Check if consumer is already running
+            if self._consumer_active:
+                _logger.warning("Consumer is already active, skipping startup")
+                return
+            
+            self._consumer_active = True
         
-        # Start multiple consumers in daemon threads
-        consumer_threads = []
-        for i in range(NUM_CONSUMERS):
-            consumer_thread = Thread(
-                target=self.fetch_and_process_messages,
-                daemon=True,
-                name=f"RabbitMQConsumer-{i+1}"
-            )
-            consumer_thread.start()
-            consumer_threads.append(consumer_thread)
-            _logger.info(f"Started Consumer {i+1}/{NUM_CONSUMERS}")
-        
-        _logger.info(f"All {NUM_CONSUMERS} consumers started successfully")
-        _logger.info(f"{'='*80}\n")
+        try:
+            _logger.info(f"\n{'='*80}")
+            _logger.info(f"Initializing Batch Processor Service")
+            _logger.info(f"Number of Consumers to Start: {NUM_CONSUMERS}")
+            _logger.info(f"{'='*80}\n")
+            
+            # Start multiple consumers in NON-DAEMON threads (so they persist)
+            consumer_threads = []
+            for i in range(NUM_CONSUMERS):
+                consumer_thread = Thread(
+                    target=self.fetch_and_process_messages,
+                    daemon=False,  # IMPORTANT: Non-daemon threads persist after main thread exits
+                    name=f"RabbitMQConsumer-{i+1}"
+                )
+                consumer_thread.start()
+                consumer_threads.append(consumer_thread)
+                _logger.info(f"Started Consumer {i+1}/{NUM_CONSUMERS} as thread: {consumer_thread.name}")
+            
+            _logger.info(f"\n✓ All {NUM_CONSUMERS} consumers started successfully")
+            _logger.info(f"✓ Batch processor service is now ACTIVE")
+            _logger.info(f"{'='*80}\n")
+            
+        except Exception as e:
+            _logger.error(f"✗ Failed to start batch processor: {e}")
+            with self._lock:
+                self._consumer_active = False
+            raise
