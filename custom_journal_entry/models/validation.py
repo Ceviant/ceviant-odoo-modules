@@ -99,20 +99,17 @@ def get_default_currency():
 
 def get_currency_id(env, currency_code):
     """Get or create currency by code using proper environment.
-    
+
     This function is a wrapper that delegates to journal_utils for the actual
     implementation to ensure a single source of truth and avoid circular imports.
     """
     try:
-        # Search all currencies and filter by name in Python
-        all_currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name'])
-        
-        # Look for currency by matching the name field
-        for curr in all_currencies:
-            if curr.get('name', '').upper() == currency_code.upper():
-                _logger.info(f"Found currency {currency_code} with ID {curr['id']}")
-                return curr['id']
-        
+        # Try to find existing currency by name
+        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+        if currency:
+            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
+            return currency.id
+
         # Create if not found
         _logger.info(f"Creating new currency {currency_code}")
         new_currency = env['res.currency'].sudo().create({'name': currency_code})
