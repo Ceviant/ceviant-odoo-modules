@@ -100,8 +100,10 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # Get all currencies with possible fields
-        currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name', 'code', 'iso_code', 'currency_code'], order=False)
+        # Get all currencies - use search() then read() to avoid ordering issues
+        currency_ids = env['res.currency'].sudo().search([])
+        _logger.info(f"Currency IDs found: {currency_ids}")
+        currencies = currency_ids.read(['id', 'name', 'code', 'iso_code', 'currency_code'])
         for currency in currencies:
             # Check each possible field
             for field in ['code', 'name', 'iso_code', 'currency_code']:
@@ -132,7 +134,9 @@ def get_currency_id(env, currency_code):
 def get_available_currencies():
     """Get list of all available currencies in the system."""
     env = request.env
-    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name', 'code', 'iso_code', 'currency_code', 'symbol'], order=False)
+    # Use search() then read() to avoid ordering issues
+    currency_ids = env['res.currency'].sudo().search([])
+    currencies = currency_ids.read(['id', 'name', 'code', 'iso_code', 'currency_code', 'symbol'])
     result = []
     for curr in currencies:
         code = None
