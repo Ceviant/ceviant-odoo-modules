@@ -104,7 +104,7 @@ def create_account(payload):
         return None, error_message
 
     # Validate currency
-    currency_id = get_currency_id(payload['currency'])
+    currency_id = get_currency_id(env, payload['currency'])
     if not currency_id:
         error_message = "Invalid currency"
         _logger.error(error_message)

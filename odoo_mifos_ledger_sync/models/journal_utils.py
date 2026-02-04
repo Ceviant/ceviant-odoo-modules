@@ -144,7 +144,7 @@ def process_transaction(payload):
         _logger.info(f"✓ Date parsed: {trans_date}")
         
         _logger.info(f"Step 4: Getting currency...")
-        currency_id = get_currency_id(payload.get("currencyCode"))
+        currency_id = get_currency_id(env, payload.get("currencyCode"))
         if not currency_id:
             _logger.error(f"✗ Invalid currency: {payload.get('currencyCode')}")
             return False
@@ -296,7 +296,7 @@ def update_journal_entry_in_database(payload):
                 'date': trans_date,
                 'ref': trans_ref,
                 'narration': payload.get('comments'),
-                'currency_id': get_currency_id(payload.get('currencyCode')),
+                'currency_id': get_currency_id(env, payload.get('currencyCode')),
             })
             
             # Batch delete and recreate lines (faster than update)
@@ -328,7 +328,7 @@ def update_journal_entry_in_database(payload):
                     "branch_id": payload.get("branchId"),
                     "transaction_date": trans_date,
                     "time_stamp": payload.get("timeStamp"),
-                    "currency_id": get_currency_id(payload.get("currencyCode")),
+                    "currency_id": get_currency_id(env, payload.get("currencyCode")),
                 })
                 
                 # Batch delete and recreate custom lines

@@ -73,7 +73,7 @@ def create_account(payload):
         return None, f"Invalid account type '{account_type_name}' provided."
 
     # Validate currency
-    currency_id = get_currency_id(payload['currency'])
+    currency_id = get_currency_id(env, payload['currency'])
     if not currency_id:
         return None, "Invalid currency"
 

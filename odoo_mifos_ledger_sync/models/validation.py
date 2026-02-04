@@ -88,38 +88,17 @@ def validate_account_ids(env, account_ids):
         return set()
 
 
-def get_currency_id(currency_code):
+def get_currency_id(env, currency_code):
     """Get the currency ID from the currency code."""
     try:
-        env = request.env
-    except (RuntimeError, AttributeError):
-        # Outside HTTP context (e.g., from RabbitMQ consumer thread)
-        from odoo import api, SUPERUSER_ID
-        from odoo.tools import config
-        from odoo.modules import registry
-        from odoo import sql_db
-        
-        db_name = config.get('db_name')
-        if not db_name:
-            _logger.error("No database configured")
-            return None
-        
-        try:
-            reg = registry.Registry(db_name)
-            db_connection = sql_db.db_connect(db_name)
-            cr = db_connection.cursor()
-            env = api.Environment(cr, SUPERUSER_ID, {})
-        except Exception as e:
-            _logger.error(f"Failed to get environment for currency lookup: {e}")
-            return None
-    
-    try:
-        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
-        if currency:
-            return currency.id
-        else:
-            _logger.error(f"Currency not found for code: {currency_code}")
-            return None
+        # Get all currencies and find the one with matching code
+        currencies = env['res.currency'].sudo().search([])
+        for currency in currencies:
+            if currency.code == currency_code:
+                _logger.info(f"Found currency {currency_code} with ID {currency.id}")
+                return currency.id
+        _logger.warning(f"Currency {currency_code} not found")
+        return None
     except Exception as e:
         _logger.error(f"Error looking up currency {currency_code}: {e}")
         return None
