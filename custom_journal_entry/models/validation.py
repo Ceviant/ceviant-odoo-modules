@@ -100,21 +100,16 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # Search for currency directly by filtering all currencies
-        # Use order='' to bypass the default _order that includes 'active' field which doesn't exist
-        all_currencies = env['res.currency'].sudo().with_context(active_test=False).search([], order='')
+        # Search for currency by code directly - using search_read with fields to avoid ordering issues
+        currency_rec = env['res.currency'].sudo().search_read(
+            [('name', '=', currency_code)],
+            fields=['id', 'name'],
+            limit=1
+        )
         
-        _logger.info(f"DEBUG: All currencies object: {all_currencies}")
-        _logger.info(f"DEBUG: All currencies repr: {repr(all_currencies)}")
-        _logger.info(f"DEBUG: Looking for currency code: {currency_code}")
-        
-        for currency in all_currencies:
-            # Check the name attribute which contains the currency code
-            if hasattr(currency, 'name'):
-                _logger.info(f"  - ID: {currency.id}, Name: {currency.name}")
-                if currency.name == currency_code:
-                    _logger.info(f"Found currency {currency_code} with ID {currency.id}")
-                    return currency.id
+        if currency_rec:
+            _logger.info(f"Found currency {currency_code} with ID {currency_rec[0]['id']}")
+            return currency_rec[0]['id']
         
         _logger.warning(f"Currency {currency_code} not found")
         return None
