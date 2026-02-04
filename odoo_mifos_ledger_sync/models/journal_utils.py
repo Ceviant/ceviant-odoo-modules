@@ -11,18 +11,25 @@ _journal_cache = {}
 _currency_cache = {}
 
 def get_env():
-    """Get Odoo environment (safe for async/RQ context)."""
+    """Get Odoo environment with proper database and user context."""
     try:
         return request.env
     except RuntimeError:
-        # Called outside HTTP context (e.g., from RQ job)
-        from odoo import api
-        return api.Environment.manage().enter()
+        # Outside HTTP context - create proper environment
+        from odoo import api, SUPERUSER_ID
+        registry = api.Environment.manage()
+        return registry.enter()
 
 
 def get_company_id(env):
-    """Retrieve the company_id for the current user in Odoo."""
-    return env.user.company_id.id
+    """Retrieve the company_id - use SUPERUSER if no user context."""
+    try:
+        if env.user and env.user.id:
+            return env.user.company_id.id
+    except:
+        pass
+    # Fallback: get first active company
+    return env['res.company'].search([], limit=1).id
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
@@ -86,58 +93,75 @@ def _parse_transaction_date(date_str):
 
 
 def process_transaction(payload):
-    """Process transaction with batch operations and minimal logging."""
-    env = get_env()
-    
-    # Validate
-    is_valid, error = validate_journal_entry(payload)
-    if not is_valid:
-        _logger.error(f"Validation failed: {error}")
-        return False
-    
-    # Parse date once
-    trans_date = _parse_transaction_date(payload.get("transactionDate"))
-    if not trans_date:
-        _logger.error(f"Invalid date: {payload.get('transactionDate')}")
-        return False
-    
-    # Get currency
-    currency_id = get_currency_id(payload.get("currencyCode"))
-    if not currency_id:
-        _logger.error(f"Invalid currency: {payload.get('currencyCode')}")
-        return False
-    
-    # Extract account IDs
-    credits = [c.get("glAccountId") for c in payload.get("credits", [])]
-    debits = [d.get("glAccountId") for d in payload.get("debits", [])]
-    
-    if not credits or not debits:
-        _logger.error("Missing credits or debits")
-        return False
-    
-    # Validate accounts in single query
-    all_accounts = set(credits + debits)
-    valid_accounts = validate_account_ids(env, all_accounts)
-    if len(valid_accounts) != len(all_accounts):
-        _logger.error("Invalid account IDs")
-        return False
-    
-    # Check for duplicates
-    trans_ref = payload.get("transactionReference")
-    if env["account.move"].search([("ref", "=", trans_ref)]):
-        _logger.error(f"Duplicate transaction: {trans_ref}")
-        return False
-    
-    company_id = get_company_id(env)
-    journal = create_or_get_ledger_sync_journal(env, company_id)
-    if not journal:
-        _logger.error("Failed to get journal")
-        return False
-    
-    # Create in batch
-    line_ids = _prepare_line_ids(payload, valid_accounts)
-    
+    """Process transaction with batch operations and detailed error logging."""
     try:
+        _logger.info(f"Step 1: Getting environment...")
+        env = get_env()
+        _logger.info(f"✓ Got environment")
+        
+        _logger.info(f"Step 2: Validating payload...")
+        is_valid, error = validate_journal_entry(payload)
+        if not is_valid:
+            _logger.error(f"✗ Validation failed: {error}")
+            return False
+        _logger.info(f"✓ Validation passed")
+        
+        _logger.info(f"Step 3: Parsing transaction date...")
+        trans_date = _parse_transaction_date(payload.get("transactionDate"))
+        if not trans_date:
+            _logger.error(f"✗ Invalid date: {payload.get('transactionDate')}")
+            return False
+        _logger.info(f"✓ Date parsed: {trans_date}")
+        
+        _logger.info(f"Step 4: Getting currency...")
+        currency_id = get_currency_id(payload.get("currencyCode"))
+        if not currency_id:
+            _logger.error(f"✗ Invalid currency: {payload.get('currencyCode')}")
+            return False
+        _logger.info(f"✓ Currency ID: {currency_id}")
+        
+        _logger.info(f"Step 5: Extracting account IDs...")
+        credits = [c.get("glAccountId") for c in payload.get("credits", [])]
+        debits = [d.get("glAccountId") for d in payload.get("debits", [])]
+        
+        if not credits or not debits:
+            _logger.error("✗ Missing credits or debits")
+            return False
+        _logger.info(f"✓ Credits: {credits}, Debits: {debits}")
+        
+        _logger.info(f"Step 6: Validating accounts...")
+        all_accounts = set(credits + debits)
+        valid_accounts = validate_account_ids(env, all_accounts)
+        if len(valid_accounts) != len(all_accounts):
+            _logger.error(f"✗ Invalid account IDs. Expected {len(all_accounts)}, got {len(valid_accounts)}")
+            _logger.error(f"  All accounts: {all_accounts}")
+            _logger.error(f"  Valid accounts: {valid_accounts}")
+            return False
+        _logger.info(f"✓ All accounts valid")
+        
+        _logger.info(f"Step 7: Checking for duplicate transaction...")
+        trans_ref = payload.get("transactionReference")
+        if env["account.move"].search([("ref", "=", trans_ref)]):
+            _logger.error(f"✗ Duplicate transaction: {trans_ref}")
+            return False
+        _logger.info(f"✓ No duplicate found")
+        
+        _logger.info(f"Step 8: Getting company ID...")
+        company_id = get_company_id(env)
+        _logger.info(f"✓ Company ID: {company_id}")
+        
+        _logger.info(f"Step 9: Getting/creating journal...")
+        journal = create_or_get_ledger_sync_journal(env, company_id)
+        if not journal:
+            _logger.error("✗ Failed to get journal")
+            return False
+        _logger.info(f"✓ Journal ID: {journal.id}")
+        
+        _logger.info(f"Step 10: Preparing line items...")
+        line_ids = _prepare_line_ids(payload, valid_accounts)
+        _logger.info(f"✓ Prepared {len(line_ids)} lines")
+        
+        _logger.info(f"Step 11: Creating account.move...")
         move = env["account.move"].create({
             "journal_id": journal.id,
             "company_id": company_id,
@@ -149,7 +173,7 @@ def process_transaction(payload):
         })
         _logger.info(f"✓ Move {move.id} created")
         
-        # Batch create custom entry and lines
+        _logger.info(f"Step 12: Creating custom.journal.entry...")
         custom_entry = env["custom.journal.entry"].create({
             "branch_id": payload.get("branchId"),
             "transaction_date": trans_date,
@@ -160,8 +184,9 @@ def process_transaction(payload):
             "account_move_id": move.id,
             "currency_id": currency_id,
         })
+        _logger.info(f"✓ Custom entry {custom_entry.id} created")
         
-        # Batch create all lines at once
+        _logger.info(f"Step 13: Creating custom.journal.entry.line records...")
         custom_lines = []
         for line in line_ids:
             account_id = line[2]['account_id']
@@ -176,11 +201,15 @@ def process_transaction(payload):
         
         if custom_lines:
             env["custom.journal.entry.line"].create(custom_lines)
+            _logger.info(f"✓ Created {len(custom_lines)} custom lines")
         
+        _logger.info(f"✓ Transaction {trans_ref} processed successfully")
         return True
         
     except Exception as e:
-        _logger.error(f"Failed to create entry: {e}")
+        _logger.error(f"✗ Exception in process_transaction: {type(e).__name__}: {str(e)}")
+        import traceback
+        _logger.error(f"Traceback:\n{traceback.format_exc()}")
         return False
 
 

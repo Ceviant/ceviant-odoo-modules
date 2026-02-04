@@ -59,7 +59,10 @@ class JournalEntryController(http.Controller):
         _logger.info(f"Processing transaction synchronously...")
         
         try:
+            _logger.info(f"Calling process_transaction()...")
             result = process_transaction(payload)
+            _logger.info(f"process_transaction() returned: {result}")
+            
             if result:
                 _logger.info(f"✓ Transaction processed successfully")
                 _logger.info(f"<<< API RESPONSE: 202 Accepted")
@@ -77,7 +80,7 @@ class JournalEntryController(http.Controller):
                     content_type='application/json'
                 )
             else:
-                _logger.error(f"✗ Transaction processing failed")
+                _logger.error(f"✗ Transaction processing returned False")
                 _logger.info(f"<<< API RESPONSE: 500 Internal Server Error")
                 _logger.info("="*80 + "\n")
                 return Response(
@@ -93,7 +96,9 @@ class JournalEntryController(http.Controller):
                     content_type='application/json'
                 )
         except Exception as e:
-            _logger.error(f"✗ Processing error: {e}")
+            _logger.error(f"✗ Processing exception: {type(e).__name__}: {str(e)}")
+            import traceback
+            _logger.error(f"Traceback:\n{traceback.format_exc()}")
             _logger.info(f"<<< API RESPONSE: 500 Internal Server Error")
             _logger.info("="*80 + "\n")
             return Response(
