@@ -2,7 +2,7 @@ import logging
 import datetime
 from odoo import http
 from odoo.http import request
-from .validation import validate_journal_entry, validate_account_ids, get_currency_id
+from .validation import validate_journal_entry, validate_account_ids, get_currency_id, get_default_currency
 
 _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -125,8 +125,12 @@ def process_transaction(payload):
     currency_code = payload.get("currencyCode")
     currency_id = get_currency_id(currency_code)
     if not currency_id:
-        _logger.error(f"Currency code {currency_code} not found.")
-        return False
+        _logger.warning(f"Currency code {currency_code} not found. Using default currency NGN.")
+        default_currency_code = get_default_currency()
+        currency_id = get_currency_id(default_currency_code)
+        if not currency_id:
+            _logger.error(f"Failed to get default currency {default_currency_code}.")
+            return False
 
     credits = [credit.get("glAccountId") for credit in payload.get("credits", [])]
     debits = [debit.get("glAccountId") for debit in payload.get("debits", [])]

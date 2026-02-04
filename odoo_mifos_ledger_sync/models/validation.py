@@ -130,13 +130,13 @@ def get_default_currency():
     env = request.env
     company = env['res.company'].sudo().search([], limit=1)
     if company and company.currency_id:
-        return company.currency_id.name
-    # Fallback to USD if no company currency found
-    return 'USD'
+        return company.currency_id.code
+    # Fallback to NGN if no company currency found
+    return 'NGN'
 
 
 def get_available_currencies():
     """Get list of all available currencies in the system."""
     env = request.env
-    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name', 'symbol'])
-    return [{'id': curr['id'], 'code': curr['name'], 'symbol': curr['symbol']} for curr in currencies]
+    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'code', 'symbol'])
+    return [{'id': curr['id'], 'code': curr['code'], 'symbol': curr['symbol']} for curr in currencies]
