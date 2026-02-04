@@ -45,9 +45,14 @@ class AccountEntryController(http.Controller):
             payload['currency'] = get_default_currency()
         
         try:
-            batch_ref, error = create_account(payload)
+            result, error = create_account(payload)
             if error:
                 raise ValueError(error)
+            
+            # Extract batch_ref from result dict
+            batch_ref = result.get('batch_ref') if isinstance(result, dict) else result
+            odoo_account_id = result.get('odoo_account_id') if isinstance(result, dict) else None
+            
         except Exception as error:
             _logger.error("Account creation failed: %s", error)
             return Response(
@@ -66,7 +71,8 @@ class AccountEntryController(http.Controller):
                 "status": "success",
                 "data": {
                     "message": "Account creation request has been successfully logged.",
-                    "responseId": batch_ref
+                    "responseId": batch_ref,
+                    "odoo_account_id": odoo_account_id
                 }
             }),
             status=200,

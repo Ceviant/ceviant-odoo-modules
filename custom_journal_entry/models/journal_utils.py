@@ -212,8 +212,9 @@ def process_transaction(payload):
 
     valid_account_ids = validate_account_ids(env, all_account_ids)
     if len(valid_account_ids) != len(all_account_ids):
-        _logger.error("One or more account IDs are invalid. Transaction will not be processed.")
-        return {'status': 'error', 'message': "One or more account IDs are invalid"}
+        invalid_ids = all_account_ids - valid_account_ids
+        _logger.error(f"One or more account IDs are invalid. Transaction will not be processed. Invalid IDs: {invalid_ids}")
+        return {'status': 'error', 'message': f"One or more account IDs are invalid. Invalid account IDs: {invalid_ids}"}
 
 
     transaction_date_str = payload.get("transactionDate")

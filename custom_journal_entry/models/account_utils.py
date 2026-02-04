@@ -100,8 +100,15 @@ def create_account(payload):
         })
 
         batch_ref = generate_batch_reference()
-        _logger.info(f"Account '{payload['account_name']}' created with batch ref: {batch_ref}")
-        return batch_ref, None
+        _logger.info(f"Account '{payload['account_name']}' created with Odoo ID {new_account.id}, Custom ID {payload['account_id']}, batch ref: {batch_ref}")
+        
+        # Return both IDs - the Odoo account ID and the custom ID for reference
+        return {
+            'batch_ref': batch_ref,
+            'odoo_account_id': new_account.id,
+            'custom_account_id': new_custom_account.id,
+            'account_code': new_account.code
+        }, None
 
     except Exception as e:
         _logger.error(f"Account creation error: {str(e)}")

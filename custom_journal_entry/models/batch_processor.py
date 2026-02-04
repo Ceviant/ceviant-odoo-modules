@@ -37,12 +37,13 @@ class BatchProcessor(models.Model):
                 else:
                     raise Exception(f"Transaction processing failed: {result.get('message', 'Unknown error')}")
             elif queue_type == 'odoo_account_queue':
-                success = create_account(payload)
-                if success:
-                    self.send_notification(f"Account batch {batch_ref} processed successfully.")
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                else:
-                    raise Exception("Account creation failed")
+                result, error = create_account(payload)
+                if error or not result:
+                    raise Exception(f"Account creation failed: {error}")
+                
+                odoo_id = result.get('odoo_account_id') if isinstance(result, dict) else None
+                self.send_notification(f"Account batch {batch_ref} processed successfully with Odoo account ID {odoo_id}.")
+                ch.basic_ack(delivery_tag=method.delivery_tag)
             elif queue_type == 'odoo_update_journal_queue':
                 logging.info(f"Updating journal entry for batch {batch_ref} --")
                 result = update_journal_entry_in_database(payload)
