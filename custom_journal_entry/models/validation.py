@@ -98,47 +98,19 @@ def get_default_currency():
 
 
 def get_currency_id(env, currency_code):
-    """Get or create currency by code using proper environment.
-
-    This function is a wrapper that delegates to journal_utils for the actual
-    implementation to ensure a single source of truth and avoid circular imports.
-    """
+    """Get currency by code. Returns None if not found."""
     try:
-        # Get all currencies and find by code field (Odoo 18.0 uses different field names)
-        all_currencies = env['res.currency'].sudo().search_read([], fields=['id'], order='id')
+        # Try to find existing currency by code
+        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
+        if currency:
+            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
+            return currency.id
 
-        # Try to find existing currency by checking each one
-        for curr_record in all_currencies:
-            curr = env['res.currency'].sudo().browse(curr_record['id'])
-            # Check if this currency matches our code
-            if hasattr(curr, 'name') and curr.name == currency_code:
-                _logger.info(f"Found currency {currency_code} with ID {curr.id}")
-                return curr.id
-            elif hasattr(curr, 'code') and curr.code == currency_code:
-                _logger.info(f"Found currency {currency_code} with ID {curr.id}")
-                return curr.id
-
-        # Create if not found - try different field names for Odoo 18.0
-        _logger.info(f"Creating new currency {currency_code}")
-        # Try creating with 'name' field first
-        try:
-            new_currency = env['res.currency'].sudo().create({'name': currency_code})
-            _logger.info(f"Created currency {currency_code} with ID {new_currency.id}")
-            return new_currency.id
-        except Exception as create_error:
-            _logger.warning(f"Failed to create with 'name' field: {create_error}")
-            # Try with 'code' field
-            try:
-                new_currency = env['res.currency'].sudo().create({'code': currency_code})
-                _logger.info(f"Created currency {currency_code} with ID {new_currency.id}")
-                return new_currency.id
-                _logger.error(f"Failed to create currency with any field: {create_error2}")
-                return None
+        _logger.warning(f"Currency {currency_code} not found")
+        return None
 
     except Exception as e:
-        _logger.error(f"Currency lookup/creation failed for {currency_code}: {e}")
-        import traceback
-        _logger.error(f"Traceback: {traceback.format_exc()}")
+        _logger.error(f"Currency lookup failed for {currency_code}: {e}")
         return None
 
 
