@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Startup module to initialize RabbitMQ consumer on Odoo startup.
-This ensures the consumer is started whenever Odoo starts.
+Startup module to initialize DB Processor on Odoo startup.
+This processes pending journal entries directly from the database instead of using RabbitMQ queue.
 """
 import logging
 from odoo import api, SUPERUSER_ID
@@ -10,27 +10,27 @@ from odoo.tools import config
 _logger = logging.getLogger(__name__)
 
 
-def _start_rabbitmq_consumer(cr, registry):
-    """Start RabbitMQ consumer on Odoo startup."""
+def _start_db_processor(cr, registry):
+    """Start DB Processor on Odoo startup."""
     try:
         _logger.info("\n" + "="*80)
-        _logger.info(">>> ODOO STARTUP: Initializing RabbitMQ Consumer")
+        _logger.info(">>> ODOO STARTUP: Initializing DB Processor")
         _logger.info("="*80 + "\n")
         
         # Get the environment
         env = api.Environment(cr, SUPERUSER_ID, {})
         
-        # Get the batch processor model
-        batch_processor_model = env['custom_journal_entry.batch_processor']
+        # Get the DB processor model
+        db_processor_model = env['db.processor']
         
-        # Start the consumer
-        _logger.info("Calling run_batch_processor()...")
-        batch_processor_model.run_batch_processor()
+        # Start the processor
+        _logger.info("Calling start_processor()...")
+        db_processor_model.start_processor()
         
-        _logger.info("✓ RabbitMQ consumer started successfully on Odoo startup")
+        _logger.info("✓ DB Processor started successfully on Odoo startup")
         
     except Exception as e:
-        _logger.error(f"✗ Failed to start RabbitMQ consumer on startup: {e}")
+        _logger.error(f"✗ Failed to start DB Processor on startup: {e}")
         import traceback
         _logger.error(traceback.format_exc())
 

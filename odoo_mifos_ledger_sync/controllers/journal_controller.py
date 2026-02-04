@@ -2,7 +2,8 @@
 from odoo import http
 from odoo.http import request, Response
 from ..models.validation import validate_journal_entry
-from ..models.rabbitmq_publisher import publish_journal_entry_to_rabbitmq, publish_journal_entry_update_to_rabbitmq
+from ..models.journal_utils import process_transaction, update_journal_entry_in_database
+from ..models.account_utils import create_account
 import logging
 import json
 
@@ -55,26 +56,44 @@ class JournalEntryController(http.Controller):
             )
 
         _logger.info(f"✓ Validation passed")
-        _logger.info(f"Publishing to RabbitMQ...")
-        batch_ref = publish_journal_entry_to_rabbitmq(payload)
-        if batch_ref:
-            _logger.info(f"✓ Successfully published with batch_ref: {batch_ref}")
-            _logger.info(f"<<< API RESPONSE: 202 Accepted (batch_ref: {batch_ref})")
-            _logger.info("="*80 + "\n")
-            return Response(
-                json.dumps({
-                    "code": 202,
-                    "status": "success",
-                    "data": {
-                        "message": "Request has been successfully logged.",
-                        "responseId": batch_ref
-                    }
-                }),
-                status=202,
-                content_type='application/json'
-            )
-        else:
-            _logger.error(f"✗ Failed to publish to RabbitMQ")
+        _logger.info(f"Processing transaction synchronously...")
+        
+        try:
+            result = process_transaction(payload)
+            if result:
+                _logger.info(f"✓ Transaction processed successfully")
+                _logger.info(f"<<< API RESPONSE: 202 Accepted")
+                _logger.info("="*80 + "\n")
+                return Response(
+                    json.dumps({
+                        "code": 202,
+                        "status": "success",
+                        "data": {
+                            "message": "Transaction processed successfully.",
+                            "responseId": payload.get('transactionReference')
+                        }
+                    }),
+                    status=202,
+                    content_type='application/json'
+                )
+            else:
+                _logger.error(f"✗ Transaction processing failed")
+                _logger.info(f"<<< API RESPONSE: 500 Internal Server Error")
+                _logger.info("="*80 + "\n")
+                return Response(
+                    json.dumps({
+                        "code": 500,
+                        "status": "error",
+                        "data": {
+                            "message": "Failed to process transaction",
+                            "responseId": None
+                        }
+                    }),
+                    status=500,
+                    content_type='application/json'
+                )
+        except Exception as e:
+            _logger.error(f"✗ Processing error: {e}")
             _logger.info(f"<<< API RESPONSE: 500 Internal Server Error")
             _logger.info("="*80 + "\n")
             return Response(
@@ -82,7 +101,7 @@ class JournalEntryController(http.Controller):
                     "code": 500,
                     "status": "error",
                     "data": {
-                        "message": "Failed to publish to RabbitMQ",
+                        "message": str(e),
                         "responseId": None
                     }
                 }),
@@ -120,6 +139,7 @@ class JournalEntryController(http.Controller):
         _logger.info("Received payload: %s", json.dumps(payload))
         valid, error = validate_journal_entry(payload)
         if not valid:
+            _logger.error(f"✗ Validation failed: {error}")
             return Response(
                 json.dumps({
                     "code": 400,
@@ -133,27 +153,51 @@ class JournalEntryController(http.Controller):
                 content_type='application/json'
             )
 
-        batch_ref = publish_journal_entry_update_to_rabbitmq(payload)
-        if batch_ref:
-            return Response(
-                json.dumps({
-                    "code": 202,
-                    "status": "success",
-                    "data": {
-                        "message": "Update request has been successfully logged.",
-                        "responseId": batch_ref
-                    }
-                }),
-                status=202,
-                content_type='application/json'
-            )
-        else:
+        _logger.info(f"Processing update synchronously...")
+        try:
+            result = update_journal_entry_in_database(payload)
+            if result:
+                _logger.info(f"✓ Update processed successfully")
+                _logger.info(f"<<< API RESPONSE: 202 Accepted")
+                _logger.info("="*80 + "\n")
+                return Response(
+                    json.dumps({
+                        "code": 202,
+                        "status": "success",
+                        "data": {
+                            "message": "Update processed successfully.",
+                            "responseId": payload.get('transactionReference')
+                        }
+                    }),
+                    status=202,
+                    content_type='application/json'
+                )
+            else:
+                _logger.error(f"✗ Update processing failed")
+                _logger.info(f"<<< API RESPONSE: 500 Internal Server Error")
+                _logger.info("="*80 + "\n")
+                return Response(
+                    json.dumps({
+                        "code": 500,
+                        "status": "error",
+                        "data": {
+                            "message": "Failed to process update",
+                            "responseId": None
+                        }
+                    }),
+                    status=500,
+                    content_type='application/json'
+                )
+        except Exception as e:
+            _logger.error(f"✗ Update processing error: {e}")
+            _logger.info(f"<<< API RESPONSE: 500 Internal Server Error")
+            _logger.info("="*80 + "\n")
             return Response(
                 json.dumps({
                     "code": 500,
                     "status": "error",
                     "data": {
-                        "message": "Failed to publish update to RabbitMQ",
+                        "message": str(e),
                         "responseId": None
                     }
                 }),
