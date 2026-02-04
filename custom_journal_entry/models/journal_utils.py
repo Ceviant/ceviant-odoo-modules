@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from odoo import http
 from odoo.http import request
-from .validation import validate_journal_entry, validate_account_ids, get_default_currency
+from .validation import validate_journal_entry, validate_account_ids, get_default_currency, get_currency_id
 
 _logger = logging.getLogger(__name__)
 
@@ -57,33 +57,6 @@ def get_company_id(env):
     user = env.user
     company_id = user.company_id.id
     return company_id
-
-
-def get_currency_id(env, currency_code):
-    """Get or create currency by code using proper environment."""
-    try:
-        # Search by code first
-        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
-        if currency:
-            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
-            return currency.id
-        
-        # Try by name
-        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
-        if currency:
-            _logger.info(f"Found currency by name {currency_code} with ID {currency.id}")
-            return currency.id
-        
-        # Create if not found
-        _logger.info(f"Creating new currency {currency_code}")
-        new_currency = env['res.currency'].sudo().create({'code': currency_code, 'name': currency_code})
-        _logger.info(f"Created currency {currency_code} with ID {new_currency.id}")
-        return new_currency.id
-    except Exception as e:
-        _logger.error(f"Currency lookup/creation failed for {currency_code}: {e}")
-        import traceback
-        _logger.error(f"Traceback: {traceback.format_exc()}")
-        return None
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
@@ -204,18 +177,22 @@ def _prepare_line_ids(payload, valid_account_ids, env):
 
 
 def process_transaction(payload):
-    """Process a transaction, including validation and posting to Odoo."""
+    """Process a transaction, including validation and posting to Odoo.
+    
+    Returns:
+        dict: {'status': 'success'/'error', 'message': 'Description'}
+    """
     try:
         env = get_env()
     except Exception as e:
         _logger.error(f"Failed to get environment: {e}")
-        return False
+        return {'status': 'error', 'message': f"Failed to get environment: {str(e)}"}
     
     is_valid, validation_error = validate_journal_entry(payload)
 
     if not is_valid:
         _logger.error(f"Payload validation failed: {validation_error}")
-        return False
+        return {'status': 'error', 'message': validation_error}
 
     currency_code = payload.get("currencyCode")
     currency_id = get_currency_id(env, currency_code)
@@ -225,14 +202,14 @@ def process_transaction(payload):
         currency_id = get_currency_id(env, default_currency_code)
         if not currency_id:
             _logger.error(f"Failed to get default currency {default_currency_code}.")
-            return False
+            return {'status': 'error', 'message': f"Failed to get currency {currency_code}"}
 
     credits = [credit.get("glAccountId") for credit in payload.get("credits", [])]
     debits = [debit.get("glAccountId") for debit in payload.get("debits", [])]
 
     if not credits or not debits:
         _logger.error("Payload missing required fields 'credits' or 'debits'")
-        return False
+        return {'status': 'error', 'message': "Missing required fields 'credits' or 'debits'"}
 
     all_account_ids = set(credits + debits)
     _logger.info(f"All account IDs {all_account_ids}")
@@ -240,7 +217,7 @@ def process_transaction(payload):
     valid_account_ids = validate_account_ids(env, all_account_ids)
     if len(valid_account_ids) != len(all_account_ids):
         _logger.error("One or more account IDs are invalid. Transaction will not be processed.")
-        return False
+        return {'status': 'error', 'message': "One or more account IDs are invalid"}
 
 
     transaction_date_str = payload.get("transactionDate")
@@ -248,7 +225,7 @@ def process_transaction(payload):
         transaction_date = datetime.strptime(transaction_date_str, "%d %B %Y").strftime("%Y-%m-%d")
     except (ValueError, TypeError) as e:
         _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
-        return False
+        return {'status': 'error', 'message': "Invalid transaction date format"}
 
     company_id = get_company_id(env)
     _logger.info(f"Company ID {company_id}")
@@ -256,7 +233,7 @@ def process_transaction(payload):
     journal = create_or_get_ledger_sync_journal(env, company_id)
     if not journal:
         _logger.error("Failed to retrieve or create the 'Ledger Sync' journal.")
-        return False
+        return {'status': 'error', 'message': "Failed to retrieve or create 'Ledger Sync' journal"}
 
     transaction_reference = payload.get("transactionReference")
     existing_transaction = env["account.move"].search([
@@ -266,7 +243,7 @@ def process_transaction(payload):
     if existing_transaction:
         error_message = f"Transaction with reference '{transaction_reference}' already exists."
         _logger.error(error_message)
-        return False
+        return {'status': 'error', 'message': error_message}
 
     _logger.info(f"Journal ID: {journal.id}, Journal Name: {journal.name}")
 
@@ -319,9 +296,9 @@ def process_transaction(payload):
         _logger.error(f"Error creating journal entry: {e}")
         import traceback
         _logger.error(f"Traceback: {traceback.format_exc()}")
-        return False
+        return {'status': 'error', 'message': f"Error creating journal entry: {str(e)}"}
 
-    return True
+    return {'status': 'success', 'message': 'Journal entry created successfully'}
 
 
 def update_journal_entry_in_database(payload):

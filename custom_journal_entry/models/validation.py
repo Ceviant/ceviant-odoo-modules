@@ -97,6 +97,37 @@ def get_default_currency():
     return 'NGN'
 
 
+def get_currency_id(env, currency_code):
+    """Get or create currency by code using proper environment.
+    
+    This function is a wrapper that delegates to journal_utils for the actual
+    implementation to ensure a single source of truth and avoid circular imports.
+    """
+    try:
+        # Search by code first
+        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
+        if currency:
+            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
+            return currency.id
+        
+        # Try by name
+        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+        if currency:
+            _logger.info(f"Found currency by name {currency_code} with ID {currency.id}")
+            return currency.id
+        
+        # Create if not found
+        _logger.info(f"Creating new currency {currency_code}")
+        new_currency = env['res.currency'].sudo().create({'code': currency_code, 'name': currency_code})
+        _logger.info(f"Created currency {currency_code} with ID {new_currency.id}")
+        return new_currency.id
+    except Exception as e:
+        _logger.error(f"Currency lookup/creation failed for {currency_code}: {e}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
+
+
 def get_available_currencies():
     """Get list of all available currencies in the system."""
     env = request.env

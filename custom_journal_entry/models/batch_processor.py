@@ -30,12 +30,12 @@ class BatchProcessor(models.Model):
 
             if queue_type == 'odoo_transaction_queue':
                 logging.info(f"Processing transaction for batch {batch_ref} --")
-                success = process_transaction(payload)
-                if success:
+                result = process_transaction(payload)
+                if result.get('status') == 'success':
                     self.send_notification(f"Journal batch {batch_ref} processed and updated successfully.")
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 else:
-                    raise Exception("Transaction processing failed")
+                    raise Exception(f"Transaction processing failed: {result.get('message', 'Unknown error')}")
             elif queue_type == 'odoo_account_queue':
                 success = create_account(payload)
                 if success:
@@ -45,12 +45,12 @@ class BatchProcessor(models.Model):
                     raise Exception("Account creation failed")
             elif queue_type == 'odoo_update_journal_queue':
                 logging.info(f"Updating journal entry for batch {batch_ref} --")
-                success = update_journal_entry_in_database(payload)
-                if success:
+                result = update_journal_entry_in_database(payload)
+                if result.get('status') == 'success':
                     self.send_notification(f"Journal entry batch {batch_ref} updated successfully.")
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 else:
-                    raise Exception("Journal entry update failed")
+                    raise Exception(f"Journal entry update failed: {result.get('message', 'Unknown error')}")
         except json.JSONDecodeError as e:
             self.send_notification(f"JSON decode error processing batch {batch_ref}: {str(e)}")
             logging.error(f"JSON decode error: {str(e)}")
