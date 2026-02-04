@@ -104,13 +104,16 @@ def get_currency_id(env, currency_code):
     implementation to ensure a single source of truth and avoid circular imports.
     """
     try:
-        # Search by name field (currency code is stored in name field in Odoo)
-        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
-        if currency:
-            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
-            return currency.id
+        # Search all currencies and filter by name in Python
+        all_currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name'])
         
-        # Create if not found - set name to currency code
+        # Look for currency by matching the name field
+        for curr in all_currencies:
+            if curr.get('name', '').upper() == currency_code.upper():
+                _logger.info(f"Found currency {currency_code} with ID {curr['id']}")
+                return curr['id']
+        
+        # Create if not found
         _logger.info(f"Creating new currency {currency_code}")
         new_currency = env['res.currency'].sudo().create({'name': currency_code})
         _logger.info(f"Created currency {currency_code} with ID {new_currency.id}")
