@@ -100,17 +100,29 @@ def get_default_currency():
 def get_currency_id(env, currency_code):
     """Get currency by code. Returns None if not found."""
     try:
-        # Search for currency by code, bypassing active filter
-        currency = env['res.currency'].sudo().with_context(active_test=False).search([('name', '=', currency_code)], limit=1)
-        if currency:
-            _logger.info(f"Found currency {currency_code} with ID {currency.id}")
-            return currency.id
-
+        # Search for currency directly by filtering all currencies
+        # This approach avoids domain issues
+        all_currencies = env['res.currency'].sudo().with_context(active_test=False).search([])
+        
+        _logger.info(f"DEBUG: All currencies object: {all_currencies}")
+        _logger.info(f"DEBUG: All currencies repr: {repr(all_currencies)}")
+        _logger.info(f"DEBUG: Looking for currency code: {currency_code}")
+        
+        for currency in all_currencies:
+            # Check the name attribute which contains the currency code
+            if hasattr(currency, 'name'):
+                _logger.info(f"  - ID: {currency.id}, Name: {currency.name}")
+                if currency.name == currency_code:
+                    _logger.info(f"Found currency {currency_code} with ID {currency.id}")
+                    return currency.id
+        
         _logger.warning(f"Currency {currency_code} not found")
         return None
 
     except Exception as e:
         _logger.error(f"Currency lookup failed for {currency_code}: {e}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 
