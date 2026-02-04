@@ -76,79 +76,62 @@ def validate_account_entry(payload):
 
 
 def validate_account_ids(env, account_ids):
-    """Validate that the provided account IDs exist in Odoo"""
+    """Validate that the provided account IDs exist in Odoo."""
     try:
-        _logger.info(f"Validating account IDs: {account_ids}")
         existing_records = env['account.account'].search([('id', 'in', list(account_ids))])
-        existing_ids = [rec.id for rec in existing_records]
-        _logger.info(f"Existing account IDs: {existing_ids}")
-        return set(existing_ids)
+        return {rec.id for rec in existing_records}
     except Exception as e:
-        _logger.error(f"Failed to validate account IDs in Odoo: {e}")
+        _logger.error(f"Account validation failed: {e}")
         return set()
 
 
 def get_currency_id(currency_code):
-    """Get the currency ID from the currency code."""
+    """Get or create currency by code."""
     try:
         env = request.env
     except (RuntimeError, AttributeError):
-        # Outside HTTP context (e.g., from RabbitMQ consumer thread)
         from odoo import api, SUPERUSER_ID
         from odoo.tools import config
-        from odoo.modules import registry
         from odoo import sql_db
         
         db_name = config.get('db_name')
         if not db_name:
-            _logger.error("No database configured")
             return None
         
         try:
-            reg = registry.Registry(db_name)
             db_connection = sql_db.db_connect(db_name)
             cr = db_connection.cursor()
             env = api.Environment(cr, SUPERUSER_ID, {})
-        except Exception as e:
-            _logger.error(f"Failed to get environment for currency lookup: {e}")
+        except Exception:
             return None
     
     try:
-        # Try searching by code field first
-        try:
-            currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
-            if currency:
-                return currency.id
-        except Exception as code_error:
-            _logger.warning(f"Code field search failed: {code_error}. Trying name field.")
+        # Search by code first
+        currency = env['res.currency'].sudo().search([('code', '=', currency_code)], limit=1)
+        if currency:
+            return currency.id
         
-        # Fallback to searching by name field
-        try:
-            currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
-            if currency:
-                return currency.id
-        except Exception as name_error:
-            _logger.warning(f"Name field search failed: {name_error}. Listing available currencies.")
+        # Try by name
+        currency = env['res.currency'].sudo().search([('name', '=', currency_code)], limit=1)
+        if currency:
+            return currency.id
         
-        # Log all available currencies for debugging
-        _logger.error(f"Currency {currency_code} not found. Available currencies:")
-        all_currencies = env['res.currency'].sudo().search([])
-        for curr in all_currencies:
-            _logger.error(f"  - ID: {curr.id}, Name: {getattr(curr, 'name', 'N/A')}, Code: {getattr(curr, 'code', 'N/A')}")
-        
-        return None
+        # Create if not found
+        return env['res.currency'].sudo().create({'code': currency_code, 'name': currency_code}).id
     except Exception as e:
-        _logger.error(f"Error looking up currency {currency_code}: {e}")
+        _logger.error(f"Currency lookup failed for {currency_code}: {e}")
         return None
 
 
 def get_default_currency():
-    """Get Odoo's default/base currency from the company."""
-    env = request.env
-    company = env['res.company'].sudo().search([], limit=1)
-    if company and company.currency_id:
-        return company.currency_id.code
-    # Fallback to NGN if no company currency found
+    """Get Odoo's default currency or fallback to NGN."""
+    try:
+        env = request.env
+        company = env['res.company'].sudo().search([], limit=1)
+        if company and company.currency_id:
+            return company.currency_id.code
+    except Exception:
+        pass
     return 'NGN'
 
 
