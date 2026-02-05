@@ -200,8 +200,8 @@ def process_transaction(payload):
         _logger.error(f"Failed to get currency {currency_code} or default.")
         return {'status': 'error', 'message': f"Failed to get currency {currency_code}"}
 
-    credits = [credit.get("glAccountId") for credit in payload.get("credits", [])]
-    debits = [debit.get("glAccountId") for debit in payload.get("debits", [])]
+    credits = [int(credit.get("glAccountId")) for credit in payload.get("credits", []) if credit.get("glAccountId") is not None]
+    debits = [int(debit.get("glAccountId")) for debit in payload.get("debits", []) if debit.get("glAccountId") is not None]
 
     if not credits or not debits:
         _logger.error("Payload missing required fields 'credits' or 'debits'")

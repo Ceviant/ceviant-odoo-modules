@@ -86,7 +86,8 @@ def validate_account_ids(env, account_ids):
         return set()
     
     try:
-        account_id_list = list(account_ids)
+        # Convert all IDs to integers to handle float/string inputs from JSON
+        account_id_list = [int(id) for id in account_ids if id is not None]
         _logger.debug(f"Validating account IDs: {account_id_list}")
         
         # First, try to find accounts directly in account.account (native Odoo accounts)
