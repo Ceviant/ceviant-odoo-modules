@@ -51,10 +51,26 @@ def _get_valid_account_types(env):
         _logger.debug(f"Cached {len(_valid_account_types_cache)} account types")
     return _valid_account_types_cache
 
+def _create_custom_entry(CustomAccountEntry, payload, account_type_name, currency_id):
+    """Helper to create custom account entry with consistent field mapping."""
+    try:
+        entry = CustomAccountEntry.create({
+            'account_id': payload['account_id'],
+            'account_name': payload['account_name'],
+            'account_type': account_type_name,
+            'currency_id': currency_id,
+            'account_code': payload['account_code'],
+        })
+        return entry
+    except Exception as e:
+        _logger.warning(f"Could not create custom account entry: {str(e)}")
+        return None
+
+
 def create_account(payload):
     """Create a new account in Odoo with validation and error handling."""
     env = request.env
-    Account = env['account.account'].sudo()  # Use sudo to bypass ACL restrictions
+    Account = env['account.account'].sudo()
     CustomAccountEntry = env['custom.account.entry'].sudo()
 
     # Validate payload early (fail-fast pattern)
@@ -77,47 +93,59 @@ def create_account(payload):
     if not currency_id:
         return None, "Invalid currency"
 
-    # Check for duplicate account code - return existing account if found
     code = payload.get('account_code')
+    
+    # Check for duplicate account code and fetch or create custom entry in single query
     existing_account = Account.search([('code', '=', code)], limit=1)
     if existing_account:
-        _logger.info(f"Account with code '{code}' already exists. Returning existing account ID {existing_account.id}")
+        _logger.info(f"Account with code '{code}' already exists (ID: {existing_account.id})")
+        
+        # Search by account_id (external identifier) for better accuracy
+        existing_custom_entry = CustomAccountEntry.search([
+            ('account_id', '=', payload['account_id'])
+        ], limit=1)
+        
+        # Create custom entry if missing
+        if not existing_custom_entry:
+            existing_custom_entry = _create_custom_entry(
+                CustomAccountEntry, payload, account_type_name, currency_id
+            )
+            if existing_custom_entry:
+                _logger.info(f"Created missing custom entry for account {existing_account.id}")
+        
         return {
             'batch_ref': generate_batch_reference(),
             'odoo_account_id': existing_account.id,
+            'custom_account_id': existing_custom_entry.id if existing_custom_entry else None,
             'account_code': existing_account.code
         }, None
 
+    # Create new account and custom entry
     try:
         new_account = Account.create({
-            'code': payload['account_code'],
+            'code': code,
             'name': payload['account_name'],
             'account_type': account_type_name,
             'currency_id': currency_id,
             'reconcile': payload.get('account_status', '').lower() == 'active',
         })
 
-        new_custom_account = CustomAccountEntry.create({
-            'account_id': payload['account_id'],
-            'account_name': payload['account_name'],
-            'account_type': account_type_name,
-            'currency_id': currency_id,
-            'account_code': payload['account_code'],
-        })
+        new_custom_account = _create_custom_entry(
+            CustomAccountEntry, payload, account_type_name, currency_id
+        )
 
         batch_ref = generate_batch_reference()
-        _logger.info(f"Account '{payload['account_name']}' created with Odoo ID {new_account.id}, Custom ID {payload['account_id']}, batch ref: {batch_ref}")
+        _logger.info(f"Account '{payload['account_name']}' created (Odoo ID: {new_account.id}, Custom ID: {payload['account_id']}, Batch: {batch_ref})")
         
-        # Return both IDs - the Odoo account ID and the custom ID for reference
         return {
             'batch_ref': batch_ref,
             'odoo_account_id': new_account.id,
-            'custom_account_id': new_custom_account.id,
+            'custom_account_id': new_custom_account.id if new_custom_account else None,
             'account_code': new_account.code
         }, None
 
     except Exception as e:
-        _logger.error(f"Account creation error: {str(e)}")
+        _logger.error(f"Account creation failed: {type(e).__name__}: {str(e)}")
         return None, f"Error creating account: {str(e)}"
 
 def get_account_data(env, accounts):
