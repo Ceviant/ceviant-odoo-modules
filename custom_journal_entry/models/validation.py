@@ -139,7 +139,7 @@ def get_default_currency():
             return company.currency_id.code
     except Exception:
         pass
-    return 'USD'
+    return 'NGN'
 
 
 def get_currency_id(env, currency_code):

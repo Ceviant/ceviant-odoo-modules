@@ -77,10 +77,16 @@ def create_account(payload):
     if not currency_id:
         return None, "Invalid currency"
 
-    # Check for duplicate account code
+    # Check for duplicate account code - return existing account if found
     code = payload.get('account_code')
-    if Account.search([('code', '=', code)], limit=1):
-        return None, f"Account with code '{code}' already exists."
+    existing_account = Account.search([('code', '=', code)], limit=1)
+    if existing_account:
+        _logger.info(f"Account with code '{code}' already exists. Returning existing account ID {existing_account.id}")
+        return {
+            'batch_ref': generate_batch_reference(),
+            'odoo_account_id': existing_account.id,
+            'account_code': existing_account.code
+        }, None
 
     try:
         new_account = Account.create({
