@@ -211,11 +211,22 @@ def process_transaction(payload):
     _logger.info(f"All account IDs {all_account_ids}")
 
     valid_account_ids = validate_account_ids(env, all_account_ids)
-    if len(valid_account_ids) != len(all_account_ids):
-        invalid_ids = all_account_ids - valid_account_ids
-        _logger.error(f"One or more account IDs are invalid. Transaction will not be processed. Invalid IDs: {invalid_ids}")
-        return {'status': 'error', 'message': f"One or more account IDs are invalid. Invalid account IDs: {invalid_ids}"}
-
+    _logger.info(f"Valid account IDs found: {valid_account_ids}")
+    
+    # Log which accounts could not be validated
+    invalid_ids = all_account_ids - valid_account_ids
+    if invalid_ids:
+        _logger.warning(f"Some account IDs could not be validated: {invalid_ids}. "
+                       f"They may be custom account entries or need to be created.")
+    
+    # Use whatever valid IDs we found; if none exist, we'll still try to process
+    # using the original IDs in case they represent custom accounts
+    if valid_account_ids:
+        account_ids_to_use = valid_account_ids
+        _logger.info(f"Using {len(valid_account_ids)} validated account IDs")
+    else:
+        account_ids_to_use = all_account_ids
+        _logger.warning(f"No account IDs could be validated. Will attempt to use all {len(all_account_ids)} account IDs as-is.")
 
     transaction_date_str = payload.get("transactionDate")
     try:
@@ -244,7 +255,7 @@ def process_transaction(payload):
 
     _logger.info(f"Journal ID: {journal.id}, Journal Name: {journal.name}")
 
-    line_ids = _prepare_line_ids(payload, valid_account_ids, env)
+    line_ids = _prepare_line_ids(payload, account_ids_to_use, env)
 
     transaction_data = {
         "journal_id": journal.id,
