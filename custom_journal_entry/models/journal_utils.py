@@ -53,9 +53,10 @@ def get_env():
 
 
 def get_company_id(env):
-    """Retrieve the company_id for the current user in Odoo."""
-    user = env.user
-    company_id = user.company_id.id
+    """Retrieve the company_id for the current context in Odoo."""
+    # Use env.company to get the company from the current context
+    # This works both in HTTP context and when running from RabbitMQ consumer threads
+    company_id = env.company.id
     return company_id
 
 
