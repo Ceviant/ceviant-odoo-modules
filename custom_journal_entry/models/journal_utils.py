@@ -34,8 +34,12 @@ def get_env():
             # Create cursor
             cr = db_connection.cursor()
             
-            # Create environment - cr will be managed by the environment
+            # Create environment with company context
+            # Get the first company from res.company to set the context
             env = api.Environment(cr, SUPERUSER_ID, {})
+            first_company = env['res.company'].search([], limit=1)
+            if first_company:
+                env = api.Environment(cr, SUPERUSER_ID, {'company_id': first_company.id})
             
             _logger.info(f"✓ Successfully created environment for database: {db_name}")
             return env
