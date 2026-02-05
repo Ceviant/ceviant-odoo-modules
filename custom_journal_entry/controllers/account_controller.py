@@ -51,7 +51,6 @@ class AccountEntryController(http.Controller):
             
             # Extract batch_ref from result dict
             batch_ref = result.get('batch_ref') if isinstance(result, dict) else result
-            odoo_account_id = result.get('odoo_account_id') if isinstance(result, dict) else None
             
         except Exception as error:
             _logger.error("Account creation failed: %s", error)
@@ -71,8 +70,7 @@ class AccountEntryController(http.Controller):
                 "status": "success",
                 "data": {
                     "message": "Account creation request has been successfully logged.",
-                    "responseId": batch_ref,
-                    "odoo_account_id": odoo_account_id
+                    "responseId": batch_ref
                 }
             }),
             status=200,
