@@ -230,7 +230,7 @@ def process_transaction(payload):
 
     transaction_date_str = payload.get("transactionDate")
     try:
-        transaction_date = datetime.strptime(transaction_date_str, "%d %B %Y").strftime("%Y-%m-%d")
+        transaction_date = datetime.strptime(transaction_date_str, "%d/%m/%Y").strftime("%Y-%m-%d")
     except (ValueError, TypeError) as e:
         _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
         return {'status': 'error', 'message': "Invalid transaction date format"}
@@ -327,7 +327,7 @@ def update_journal_entry_in_database(payload):
 
     # Parse transaction date
     try:
-        transaction_date = datetime.strptime(transaction_date_str, '%d %B %Y').strftime('%Y-%m-%d')
+        transaction_date = datetime.strptime(transaction_date_str, '%d/%m/%Y').strftime('%Y-%m-%d')
     except (ValueError, TypeError) as e:
         _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
         return {'status': 'error', 'message': 'Invalid transaction date format.'}
