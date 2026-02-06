@@ -77,28 +77,33 @@ def get_company_id(env):
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
-    """Get or create 'Ledger Sync' journal."""
+    """Get or create 'Ledger Sync' journal.
+    
+    Uses code 'LS' as unique identifier since name is a jsonb field.
+    Journal code is unique per company and limited to 5 chars.
+    """
     try:
-        # Try to find existing journal using sudo() to bypass access restrictions
+        # Search by code which is a varchar field and unique per company
         journal = env['account.journal'].sudo().search([
             ('company_id', '=', company_id),
-            ('name', '=', 'Ledger Sync')
+            ('code', '=', 'LS')
         ], limit=1)
         
         if journal:
-            _logger.info(f"Found existing journal ID {journal.id}")
+            _logger.info(f"Found existing 'Ledger Sync' journal ID {journal.id}")
             return journal
         
-        # Create new journal with sudo() context
+        # Create new journal with code 'LS' and translatable name
         journal = env['account.journal'].sudo().create({
-            'name': 'Ledger Sync',
+            'name': {'en_US': 'Ledger Sync'},
+            'code': 'LS',
             'company_id': company_id,
             'type': 'general'
         })
-        _logger.info(f"Created new journal ID {journal.id}")
+        _logger.info(f"Created new 'Ledger Sync' journal ID {journal.id}")
         return journal
     except Exception as e:
-        _logger.error(f"Failed to get/create journal: {str(e)}")
+        _logger.error(f"Failed to get/create 'Ledger Sync' journal: {str(e)}")
         raise
 
 

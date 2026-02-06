@@ -60,23 +60,26 @@ def get_company_id(env):
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
-    """Check if 'Ledger Sync' journal exists, otherwise create it (cached)."""
+    """Check if 'Ledger Sync' journal exists, otherwise create it (cached).
+    
+    Uses code 'LS' (5 char max) which is unique per company.
+    """
     cache_key = f"ledger_{company_id}"
     if cache_key in _journal_cache:
         return _journal_cache[cache_key]
     
-    journal_code = 'LEDGE'
-    existing_journal = env['account.journal'].search([
-        ('code', '=', journal_code),
-        ('company_id', '=', company_id)
+    journal_code = 'LS'  # 2 chars, safely under 5 char limit
+    existing_journal = env['account.journal'].sudo().search([
+        ('company_id', '=', company_id),
+        ('code', '=', journal_code)
     ], limit=1)
 
     if existing_journal:
-        _journal_cache[cache_key] = existing_journal[0]
-        return existing_journal[0]
+        _journal_cache[cache_key] = existing_journal
+        return existing_journal
 
-    journal_id = env['account.journal'].create({
-        'name': 'Ledger Sync',
+    journal_id = env['account.journal'].sudo().create({
+        'name': {'en_US': 'Ledger Sync'},  # JSONB format for translatable field
         'type': 'general',
         'code': journal_code,
         'company_id': company_id,
@@ -90,22 +93,24 @@ def _prepare_line_ids(payload, valid_account_ids):
     """Prepare line items in batch (faster)."""
     lines = []
     
-    # Credits
+    # Credits - use .get() for safe access
     for credit in payload.get('credits', []):
-        if credit['glAccountId'] in valid_account_ids:
+        account_id = credit.get('glAccountId')
+        if account_id in valid_account_ids:
             lines.append((0, 0, {
-                'account_id': credit['glAccountId'],
-                'credit': credit['amount'],
+                'account_id': account_id,
+                'credit': credit.get('amount', 0),
                 'debit': 0
             }))
     
     # Debits
     for debit in payload.get('debits', []):
-        if debit['glAccountId'] in valid_account_ids:
+        account_id = debit.get('glAccountId')
+        if account_id in valid_account_ids:
             lines.append((0, 0, {
-                'account_id': debit['glAccountId'],
+                'account_id': account_id,
                 'credit': 0,
-                'debit': debit['amount']
+                'debit': debit.get('amount', 0)
             }))
     
     return lines
@@ -171,7 +176,7 @@ def process_transaction(payload):
         
         _logger.info(f"Step 7: Checking for duplicate transaction...")
         trans_ref = payload.get("transactionReference")
-        existing = env["account.move"].search([("ref", "=", trans_ref)])
+        existing = env["account.move"].search([("ref", "=", trans_ref)], limit=1)
         if existing:
             _logger.error(f"✗ Duplicate transaction: {trans_ref}")
             return False
@@ -232,9 +237,12 @@ def process_transaction(payload):
         _logger.info(f"Step 13: Creating custom.journal.entry.line records...")
         custom_lines = []
         for line in line_ids:
-            account_id = line[2]['account_id']
-            amount = line[2]['credit'] if line[2]['credit'] > 0 else line[2]['debit']
-            line_type = 'credit' if line[2]['credit'] > 0 else 'debit'
+            line_data = line[2]
+            account_id = line_data['account_id']
+            credit_amount = line_data.get('credit', 0)
+            debit_amount = line_data.get('debit', 0)
+            amount = credit_amount if credit_amount > 0 else debit_amount
+            line_type = 'credit' if credit_amount > 0 else 'debit'
             custom_lines.append({
                 'journal_entry_id': custom_entry.id,
                 'gl_account_id': account_id,
@@ -282,9 +290,11 @@ def update_journal_entry_in_database(payload):
             _logger.error(f"Transaction not found: {trans_ref}")
             return False
         
-        # Verify balance
-        total_debits = sum(d.get('amount', 0) for d in payload.get('debits', []))
-        total_credits = sum(c.get('amount', 0) for c in payload.get('credits', []))
+        # Verify balance - convert to float for accurate comparison
+        debits = payload.get('debits', [])
+        credits = payload.get('credits', [])
+        total_debits = sum(float(d.get('amount', 0)) for d in debits)
+        total_credits = sum(float(c.get('amount', 0)) for c in credits)
         
         if total_debits != total_credits:
             _logger.error(f"Unbalanced: debits={total_debits} credits={total_credits}")
@@ -302,20 +312,10 @@ def update_journal_entry_in_database(payload):
             # Batch delete and recreate lines (faster than update)
             existing_entry.line_ids.unlink()
             
-            # Prepare all new lines at once
-            new_lines = []
-            for credit in payload.get('credits', []):
-                new_lines.append((0, 0, {
-                    'account_id': credit.get('glAccountId'),
-                    'credit': credit.get('amount'),
-                    'debit': 0
-                }))
-            for debit in payload.get('debits', []):
-                new_lines.append((0, 0, {
-                    'account_id': debit.get('glAccountId'),
-                    'credit': 0,
-                    'debit': debit.get('amount')
-                }))
+            # Prepare all new lines using helper function
+            all_accounts = set(c.get('glAccountId') for c in credits) | set(d.get('glAccountId') for d in debits)
+            valid_accounts = validate_account_ids(env, all_accounts)
+            new_lines = _prepare_line_ids(payload, valid_accounts)
             
             # Create all at once
             if new_lines:
@@ -335,18 +335,18 @@ def update_journal_entry_in_database(payload):
                 custom_entry.line_ids.unlink()
                 
                 custom_lines = []
-                for credit in payload.get('credits', []):
+                for credit in credits:
                     custom_lines.append({
                         'journal_entry_id': custom_entry.id,
                         'gl_account_id': credit.get('glAccountId'),
-                        'amount': credit.get('amount'),
+                        'amount': credit.get('amount', 0),
                         'type': 'credit'
                     })
-                for debit in payload.get('debits', []):
+                for debit in debits:
                     custom_lines.append({
                         'journal_entry_id': custom_entry.id,
                         'gl_account_id': debit.get('glAccountId'),
-                        'amount': debit.get('amount'),
+                        'amount': debit.get('amount', 0),
                         'type': 'debit'
                     })
                 
