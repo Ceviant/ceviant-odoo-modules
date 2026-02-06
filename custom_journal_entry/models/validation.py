@@ -116,6 +116,7 @@ def validate_account_ids(env, account_ids):
             try:
                 # Use raw SQL to search for custom account entries
                 try:
+                    # Account_id is stored as Char field, so we search with string conversion
                     env.cr.execute("""
                         SELECT account_code FROM custom_account_entry 
                         WHERE account_id = %s
@@ -124,7 +125,7 @@ def validate_account_ids(env, account_ids):
                     result = env.cr.fetchone()
                     if result:
                         account_code = result[0]
-                        _logger.debug(f"Found custom account entry for account_id {custom_id} with code {account_code}")
+                        _logger.info(f"Found custom account entry for account_id {custom_id} with code {account_code}")
                         
                         # Now find the corresponding Odoo account by code
                         try:
@@ -136,15 +137,15 @@ def validate_account_ids(env, account_ids):
                                 id_mapping[custom_id] = odoo_account.id
                                 _logger.info(f"Mapped custom account {custom_id} (code: {account_code}) to Odoo account {odoo_account.id}")
                             else:
-                                _logger.error(f"Custom account {custom_id} has code {account_code}, but no matching Odoo account found")
+                                _logger.warning(f"Custom account {custom_id} exists with code {account_code}, but no Odoo account found with that code")
                         except Exception as e:
                             _logger.error(f"Error searching for Odoo account with code {account_code}: {str(e)}")
                     else:
                         _logger.debug(f"No custom account entry found for account_id {custom_id}")
                 except Exception as e:
-                    _logger.debug(f"SQL search failed for custom account {custom_id}: {e}")
+                    _logger.warning(f"SQL search failed for custom account {custom_id}: {e}")
             except Exception as e:
-                _logger.warning(f"Error processing custom account ID {custom_id}: {str(e)}")
+                _logger.error(f"Error processing custom account ID {custom_id}: {str(e)}")
     
     remaining_unmapped = [aid for aid in account_id_list if aid not in id_mapping]
     if remaining_unmapped:

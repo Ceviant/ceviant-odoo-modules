@@ -251,7 +251,14 @@ def process_transaction(payload):
     all_account_ids = set(credits + debits)
     _logger.info(f"All account IDs {all_account_ids}")
 
-    id_mapping = validate_account_ids(env, all_account_ids)
+    try:
+        id_mapping = validate_account_ids(env, all_account_ids)
+    except Exception as e:
+        _logger.error(f"Error validating account IDs: {str(e)}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
+        return {'status': 'error', 'message': f"Error validating accounts: {str(e)}"}
+    
     _logger.info(f"Account ID mapping: {id_mapping}")
     
     # Check if all accounts could be mapped

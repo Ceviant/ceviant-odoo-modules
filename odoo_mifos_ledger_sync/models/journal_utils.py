@@ -113,26 +113,31 @@ def create_or_get_ledger_sync_journal(env, company_id):
     return journal_id
 
 
-def _prepare_line_ids(payload, valid_account_ids):
-    """Prepare line items in batch (faster)."""
+def _prepare_line_ids(payload, id_mapping):
+    """Prepare line items using account ID mapping.
+    
+    id_mapping: Dict mapping original account IDs to Odoo account IDs
+    """
     lines = []
     
-    # Credits - use .get() for safe access
+    # Credits
     for credit in payload.get('credits', []):
-        account_id = credit.get('glAccountId')
-        if account_id in valid_account_ids:
+        original_id = credit.get('glAccountId')
+        if original_id in id_mapping:
+            odoo_account_id = id_mapping[original_id]
             lines.append((0, 0, {
-                'account_id': account_id,
+                'account_id': odoo_account_id,
                 'credit': credit.get('amount', 0),
                 'debit': 0
             }))
     
     # Debits
     for debit in payload.get('debits', []):
-        account_id = debit.get('glAccountId')
-        if account_id in valid_account_ids:
+        original_id = debit.get('glAccountId')
+        if original_id in id_mapping:
+            odoo_account_id = id_mapping[original_id]
             lines.append((0, 0, {
-                'account_id': account_id,
+                'account_id': odoo_account_id,
                 'credit': 0,
                 'debit': debit.get('amount', 0)
             }))
@@ -190,13 +195,13 @@ def process_transaction(payload):
         
         _logger.info(f"Step 6: Validating accounts...")
         all_accounts = set(credits + debits)
-        valid_accounts = validate_account_ids(env, all_accounts)
-        if len(valid_accounts) != len(all_accounts):
-            _logger.error(f"✗ Invalid account IDs. Expected {len(all_accounts)}, got {len(valid_accounts)}")
+        id_mapping = validate_account_ids(env, all_accounts)
+        if len(id_mapping) != len(all_accounts):
+            _logger.error(f"✗ Invalid account IDs. Expected {len(all_accounts)}, got {len(id_mapping)}")
             _logger.error(f"  All accounts: {all_accounts}")
-            _logger.error(f"  Valid accounts: {valid_accounts}")
+            _logger.error(f"  Mapped accounts: {id_mapping}")
             return False
-        _logger.info(f"✓ All accounts valid")
+        _logger.info(f"✓ All accounts validated and mapped successfully")
         
         _logger.info(f"Step 7: Checking for duplicate transaction...")
         trans_ref = payload.get("transactionReference")
@@ -221,7 +226,7 @@ def process_transaction(payload):
         _logger.info(f"✓ Journal ID: {journal.id}")
         
         _logger.info(f"Step 10: Preparing line items...")
-        line_ids = _prepare_line_ids(payload, valid_accounts)
+        line_ids = _prepare_line_ids(payload, id_mapping)
         if not line_ids:
             _logger.error("✗ No valid line items prepared")
             return False
