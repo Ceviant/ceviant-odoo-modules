@@ -350,7 +350,10 @@ def process_transaction(payload):
     # Safe access to journal attributes
     try:
         journal_id = journal.id
-        journal_name = getattr(journal, 'name', f'Journal {journal_id}')
+        # Use code field which exists on account.journal, or fallback to a constructed name
+        journal_name = getattr(journal, 'code', f'Journal {journal_id}')
+        if not journal_name:
+            journal_name = f'Journal {journal_id}'
     except Exception as e:
         _logger.error(f"Error accessing journal attributes: {e}")
         return {'status': 'error', 'message': f"Error accessing journal: {str(e)}"}
