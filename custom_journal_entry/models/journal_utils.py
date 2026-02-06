@@ -381,23 +381,48 @@ def process_transaction(payload):
 
     line_ids = _prepare_line_ids(payload, id_mapping, env)
 
-    transaction_data = {
-        "journal_id": journal_id,
-        "company_id": company_id,
-        "date": transaction_date,
-        "ref": payload.get("transactionReference"),
-        "name": move_name,
-        "currency_id": currency_id,
-        "line_ids": line_ids,
-    }
-
-    _logger.debug(f"Transaction data: {transaction_data}")
-
     try:
-        # Create move with lines in one operation
-        transaction_id = env["account.move"].create(transaction_data)
-        _logger.info(f"Transaction {transaction_id.id} created in Odoo with {len(line_ids)} lines")
+        # Create account move using raw SQL to avoid ORM field sync issues
+        now = datetime.now()
+        env.cr.execute("""
+            INSERT INTO account_move 
+            (journal_id, company_id, date, ref, name, currency_id, 
+             state, move_type, active, create_uid, write_uid, create_date, write_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (journal_id, company_id, transaction_date, payload.get("transactionReference"), 
+              move_name, currency_id, 'draft', 'entry', True, 1, 1, now, now))
+        
+        result = env.cr.fetchone()
+        if not result:
+            raise Exception("Failed to create account move - no ID returned")
+        
+        transaction_id_value = result[0]
+        env.cr.commit()
+        
+        # Fetch the created move using browse to work with ORM
+        transaction_id = env["account.move"].sudo().browse(transaction_id_value)
+        _logger.info(f"Transaction {transaction_id.id} created in Odoo via SQL")
 
+        # Create move lines using raw SQL
+        for line in line_ids:
+            line_data = line[2]
+            env.cr.execute("""
+                INSERT INTO account_move_line 
+                (move_id, account_id, name, debit, credit, currency_id, 
+                 company_id, create_uid, write_uid, create_date, write_date)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (transaction_id_value, line_data['account_id'], line_data['name'], 
+                  line_data['debit'], line_data['credit'], currency_id, 
+                  company_id, 1, 1, now, now))
+        
+        env.cr.commit()
+        _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
+
+        # Refresh to get updated line_ids
+        transaction_id.flush()
+        
+        # Create custom journal entry using ORM
         custom_journal_entry = env["custom.journal.entry"].create({
             "branch_id": payload.get("branchId"),
             "transaction_date": transaction_date,
@@ -411,7 +436,7 @@ def process_transaction(payload):
 
         _logger.info(f"Custom journal entry created: {custom_journal_entry.id}")
 
-        # Create journal entry lines
+        # Create custom journal entry lines
         for line in line_ids:
             line_data = line[2]
             amount = line_data['credit'] or line_data['debit']
