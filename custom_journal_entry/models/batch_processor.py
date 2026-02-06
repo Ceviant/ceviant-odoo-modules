@@ -78,38 +78,53 @@ class BatchProcessor(models.Model):
             logging.error("Missing required RabbitMQ environment variables")
             return
 
-        connection = None
-        channel = None
-        try:
-            connection_parameters = pika.ConnectionParameters(
-                host=host, port=int(port), virtual_host=virtual_host,
-                credentials=pika.PlainCredentials(username, password)
-            )
-            connection = pika.BlockingConnection(connection_parameters)
-            channel = connection.channel()
-            channel.queue_declare(queue='odoo_transaction_queue', durable=True)
-            channel.queue_declare(queue='odoo_transaction_queue_dead', durable=True)
+        reconnect_delay = 5
+        while True:
+            connection = None
+            channel = None
+            try:
+                connection_parameters = pika.ConnectionParameters(
+                    host=host, port=int(port), virtual_host=virtual_host,
+                    credentials=pika.PlainCredentials(username, password),
+                    connection_attempts=3,
+                    retry_delay=2
+                )
+                connection = pika.BlockingConnection(connection_parameters)
+                channel = connection.channel()
+                channel.queue_declare(queue='odoo_transaction_queue', durable=True)
+                channel.queue_declare(queue='odoo_transaction_queue_dead', durable=True)
 
-            # Set QoS to process one message at a time
-            channel.basic_qos(prefetch_count=1)
+                # Set QoS to process one message at a time
+                channel.basic_qos(prefetch_count=1)
+                
+                # Set up continuous consumer
+                channel.basic_consume(
+                    queue='odoo_transaction_queue',
+                    on_message_callback=self.process_message,
+                    auto_ack=False
+                )
+                
+                logging.info("Consumer started, waiting for messages...")
+                channel.start_consuming()
             
-            # Set up continuous consumer
-            channel.basic_consume(
-                queue='odoo_transaction_queue',
-                on_message_callback=self.process_message,
-                auto_ack=False
-            )
-            
-            logging.info("Consumer started, waiting for messages...")
-            channel.start_consuming()
-        
-        except Exception as e:
-            logging.error(f"RabbitMQ error: {str(e)}")
-        finally:
-            if channel:
-                channel.close()
-            if connection:
-                connection.close()
+            except KeyboardInterrupt:
+                logging.info("Consumer interrupted")
+                break
+            except Exception as e:
+                logging.error(f"RabbitMQ error: {str(e)}", exc_info=True)
+                logging.info(f"Reconnecting in {reconnect_delay} seconds...")
+                time.sleep(reconnect_delay)
+            finally:
+                if channel:
+                    try:
+                        channel.close()
+                    except Exception:
+                        pass
+                if connection:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
 
     @api.model
     def run_batch_processor(self):
