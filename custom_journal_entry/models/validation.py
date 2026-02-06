@@ -133,8 +133,9 @@ def validate_account_ids(env, account_ids):
                 
                 if result:
                     odoo_account_id = result[0]
-                    id_mapping[code_str] = odoo_account_id
-                    _logger.info(f"Mapped glAccountId {code_str} to Odoo account {odoo_account_id}")
+                    # Use original_id (integer) as key to match journal_utils expectations
+                    id_mapping[original_id] = odoo_account_id
+                    _logger.info(f"Mapped glAccountId {original_id} to Odoo account {odoo_account_id}")
                 else:
                     _logger.warning(f"Account code {code_str} found in custom_account_entry, but no Odoo account found")
             except Exception as e:
@@ -142,7 +143,7 @@ def validate_account_ids(env, account_ids):
         else:
             _logger.warning(f"Account code {code_str} not found in custom_account_entry")
     
-    unmapped = [str(aid) for aid in account_ids if str(aid) not in id_mapping]
+    unmapped = [aid for aid in account_ids if aid not in id_mapping]
     if unmapped:
         _logger.error(f"Account validation failed for glAccountIds: {unmapped}")
     
