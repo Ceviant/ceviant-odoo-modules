@@ -117,16 +117,6 @@ def validate_account_ids(env, account_ids):
     for original_id in account_ids:
         code_str = str(original_id)
         
-        # First, try to find accounts directly in account.account by ID
-        try:
-            existing = env['account.account'].sudo().search([('id', '=', original_id)], limit=1)
-            if existing:
-                id_mapping[original_id] = existing.id
-                _logger.debug(f"Found native Odoo account with ID {original_id}")
-                continue
-        except Exception as e:
-            _logger.debug(f"Could not search for account ID {original_id}: {str(e)}")
-        
         # Check if account_code exists in custom_account_entry
         if code_str in custom_account_map:
             _logger.info(f"Found custom account entry for account_code {code_str}")
@@ -137,8 +127,8 @@ def validate_account_ids(env, account_ids):
                     ('code', '=', code_str)
                 ], limit=1)
                 if odoo_account:
-                    id_mapping[original_id] = odoo_account.id
-                    _logger.info(f"Mapped glAccountId {original_id} (account_code: {code_str}) to Odoo account {odoo_account.id}")
+                    id_mapping[code_str] = odoo_account.id
+                    _logger.info(f"Mapped glAccountId {code_str} to Odoo account {odoo_account.id}")
                 else:
                     _logger.warning(f"Account code {code_str} found in custom_account_entry, but no Odoo account found")
             except Exception as e:
@@ -146,7 +136,7 @@ def validate_account_ids(env, account_ids):
         else:
             _logger.warning(f"Account code {code_str} not found in custom_account_entry")
     
-    unmapped = [aid for aid in account_ids if aid not in id_mapping]
+    unmapped = [str(aid) for aid in account_ids if str(aid) not in id_mapping]
     if unmapped:
         _logger.error(f"Account validation failed for glAccountIds: {unmapped}")
     

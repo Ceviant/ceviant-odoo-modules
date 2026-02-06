@@ -78,80 +78,69 @@ def validate_account_entry(payload):
 def validate_account_ids(env, account_ids):
     """Validate and map account IDs to Odoo account IDs.
     
-    First checks if the IDs exist directly in account.account.
-    If not found, attempts to map them from custom.account.entry using account_code.
-    Returns a mapping of {original_id: odoo_account_id} for accounts that could be found.
-    Returns only IDs that could be successfully mapped/validated.
+    The glAccountId values from journal entry are actually account codes (425, 680, etc).
+    This function queries custom_account_entry by account_code, retrieves the account_id values,
+    and maps them to Odoo account IDs.
+    Returns a mapping of {glAccountId: odoo_account_id} for accounts that could be found.
     """
     if not account_ids:
         _logger.warning("No account IDs provided for validation")
         return {}
     
     try:
-        # Convert all IDs to integers to handle float/string inputs from JSON
-        account_id_list = [int(id) for id in account_ids if id is not None]
-        _logger.debug(f"Validating account IDs: {account_id_list}")
+        # glAccountId values are account codes, convert to strings
+        account_code_list = [str(id) for id in account_ids if id is not None]
+        _logger.info(f"Validating account codes (glAccountId): {account_code_list}")
     except (ValueError, TypeError) as e:
-        _logger.error(f"Error converting account IDs to integers: {e}")
+        _logger.error(f"Error converting account codes to strings: {e}")
         return {}
     
-    id_mapping = {}  # Maps original IDs to Odoo account IDs
+    id_mapping = {}
     
-    # First, try to find accounts directly in account.account (native Odoo accounts)
-    for acc_id in account_id_list:
-        try:
-            existing = env['account.account'].sudo().search([('id', '=', acc_id)], limit=1)
-            if existing:
-                id_mapping[acc_id] = acc_id  # Direct mapping
-                _logger.debug(f"Found native Odoo account with ID {acc_id}")
-        except Exception as e:
-            _logger.debug(f"Could not search for account ID {acc_id}: {str(e)}")
-    
-    # If some IDs are missing, try to map them from custom.account.entry
-    unmapped_ids = [aid for aid in account_id_list if aid not in id_mapping]
-    if unmapped_ids:
-        _logger.info(f"Attempting to find and map custom account entries for IDs: {unmapped_ids}")
+    # Query custom_account_entry for the provided account codes
+    try:
+        env.cr.execute("""
+            SELECT account_id, account_code FROM custom_account_entry 
+            WHERE account_code IN %s
+        """, (tuple(account_code_list),))
+        custom_accounts = env.cr.fetchall()
+        _logger.info(f"Found {len(custom_accounts)} custom account entries for codes {account_code_list}")
         
-        for custom_id in unmapped_ids:
+        # Build a mapping of account_code to account_code (for reference)
+        custom_account_map = {row[1]: row[1] for row in custom_accounts}
+        _logger.debug(f"Custom account mapping (code -> code): {custom_account_map}")
+    except Exception as e:
+        _logger.error(f"Error querying custom_account_entry: {e}")
+        custom_account_map = {}
+    
+    # Validate provided account codes and map to Odoo accounts
+    for original_id in account_ids:
+        code_str = str(original_id)
+        
+        # Check if account_code exists in custom_account_entry
+        if code_str in custom_account_map:
+            _logger.info(f"Found custom account entry for account_code {code_str}")
+            
+            # Find the corresponding Odoo account by code
             try:
-                # Use raw SQL to search for custom account entries
-                try:
-                    # Account_id is stored as Char field, so we search with string conversion
-                    env.cr.execute("""
-                        SELECT account_code FROM custom_account_entry 
-                        WHERE account_id = %s
-                        LIMIT 1
-                    """, (str(custom_id),))
-                    result = env.cr.fetchone()
-                    if result:
-                        account_code = result[0]
-                        _logger.info(f"Found custom account entry for account_id {custom_id} with code {account_code}")
-                        
-                        # Now find the corresponding Odoo account by code
-                        try:
-                            odoo_account = env['account.account'].sudo().search([
-                                ('code', '=', account_code)
-                            ], limit=1)
-                            if odoo_account:
-                                # Map the custom account ID to the Odoo account ID
-                                id_mapping[custom_id] = odoo_account.id
-                                _logger.info(f"Mapped custom account {custom_id} (code: {account_code}) to Odoo account {odoo_account.id}")
-                            else:
-                                _logger.warning(f"Custom account {custom_id} exists with code {account_code}, but no Odoo account found with that code")
-                        except Exception as e:
-                            _logger.error(f"Error searching for Odoo account with code {account_code}: {str(e)}")
-                    else:
-                        _logger.debug(f"No custom account entry found for account_id {custom_id}")
-                except Exception as e:
-                    _logger.warning(f"SQL search failed for custom account {custom_id}: {e}")
+                odoo_account = env['account.account'].sudo().search([
+                    ('code', '=', code_str)
+                ], limit=1)
+                if odoo_account:
+                    id_mapping[code_str] = odoo_account.id
+                    _logger.info(f"Mapped glAccountId {code_str} to Odoo account {odoo_account.id}")
+                else:
+                    _logger.warning(f"Account code {code_str} found in custom_account_entry, but no Odoo account found")
             except Exception as e:
-                _logger.error(f"Error processing custom account ID {custom_id}: {str(e)}")
+                _logger.error(f"Error searching for Odoo account with code {code_str}: {str(e)}")
+        else:
+            _logger.warning(f"Account code {code_str} not found in custom_account_entry")
     
-    remaining_unmapped = [aid for aid in account_id_list if aid not in id_mapping]
-    if remaining_unmapped:
-        _logger.error(f"Account validation failed. These account IDs could not be found or mapped: {remaining_unmapped}")
+    unmapped = [str(aid) for aid in account_ids if str(aid) not in id_mapping]
+    if unmapped:
+        _logger.error(f"Account validation failed for glAccountIds: {unmapped}")
     
-    _logger.info(f"Account validation complete. Mapped {len(id_mapping)} accounts")
+    _logger.info(f"Account validation complete. Mapped {len(id_mapping)} of {len(account_ids)} accounts")
     return id_mapping
 
 
