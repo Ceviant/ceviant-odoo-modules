@@ -365,7 +365,6 @@ def process_transaction(payload):
         "ref": payload.get("transactionReference"),
         "name": journal_name,
         "currency_id": currency_id,
-        "line_ids": line_ids,
     }
 
     _logger.debug(f"Transaction data: {transaction_data}")
@@ -373,6 +372,19 @@ def process_transaction(payload):
     try:
         transaction_id = env["account.move"].create(transaction_data)
         _logger.info(f"Transaction {transaction_id} created in Odoo")
+        
+        # Create move lines directly using raw SQL to avoid ORM sync issues
+        from datetime import datetime as dt
+        for line in line_ids:
+            line_data = line[2]
+            env.cr.execute("""
+                INSERT INTO account_move_line 
+                (move_id, account_id, debit, credit, currency_id, display_type, create_uid, write_uid, create_date, write_date)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (transaction_id.id, line_data['account_id'], line_data['debit'], 
+                  line_data['credit'], currency_id, '', 1, 1, dt.now(), dt.now()))
+        env.cr.commit()
+        _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
 
         custom_journal_entry = env["custom.journal.entry"].create({
             "branch_id": payload.get("branchId"),
