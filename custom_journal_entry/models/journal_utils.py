@@ -419,17 +419,23 @@ def process_transaction(payload):
         env.cr.commit()
         _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
 
-        # Create custom journal entry using ORM with minimal fields for compatibility
+        # Create custom journal entry using raw SQL for better compatibility
         try:
-            custom_journal_entry = env["custom.journal.entry"].create({
-                "transaction_reference": payload.get("transactionReference"),
-                "transaction_date": transaction_date,
-                "journal_id": journal_id,
-                "company_id": company_id,
-                "account_move_id": transaction_id.id,
-                "currency_id": currency_id,
-            })
-            _logger.info(f"Custom journal entry created: {custom_journal_entry.id}")
+            now = datetime.now()
+            env.cr.execute("""
+                INSERT INTO custom_journal_entry 
+                (account_move_id, journal_id, company_id, currency_id, branch_id, create_uid, write_uid, create_date, write_date)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (transaction_id_value, journal_id, company_id, currency_id, payload.get("branchId"), 1, 1, now, now))
+            
+            result = env.cr.fetchone()
+            if result:
+                custom_entry_id = result[0]
+                env.cr.commit()
+                _logger.info(f"Custom journal entry created: {custom_entry_id}")
+            else:
+                _logger.warning("Failed to create custom journal entry - no ID returned")
         except Exception as e:
             _logger.warning(f"Could not create custom journal entry: {e}. Continuing with account move only.")
 
