@@ -34,9 +34,11 @@ def get_env():
             # Create cursor
             cr = db_connection.cursor()
             
-            # Create environment with empty context
-            # Don't set company_id in context as it causes issues with res.users model
+            # Create environment with empty context to avoid field resolution issues
             env = api.Environment(cr, SUPERUSER_ID, {})
+            
+            # Invalidate cache to prevent stale field definitions
+            env.invalidate_all()
             
             _logger.info(f"✓ Successfully created environment for database: {db_name}")
             return env
@@ -79,37 +81,60 @@ def get_company_id(env):
         return 1
 
 
-def create_or_get_ledger_sync_journal(env, company_id):
-    """Get or create 'Ledger Sync' journal.
+def create_or_get_ledger_sync_journal(env, company_id, account_name=None):
+    """Get or create journal based on account name.
     
-    Uses code 'LS' as unique identifier since name is a jsonb field.
-    Journal code is unique per company and limited to 5 chars.
+    Uses account_name to create a journal-specific code and name.
+    If account_name is None, defaults to 'Ledger Sync'.
     """
+    if not account_name:
+        account_name = 'Ledger Sync'
+    
+    # Create a short code from account name (max 5 chars for code field)
+    # Use first 2 chars of account name + hash of full name for uniqueness
+    journal_code = account_name[:2].upper()
+    if len(account_name) > 2:
+        journal_code += str(hash(account_name) % 1000).zfill(3)
+    journal_code = journal_code[:5]  # Ensure max 5 chars
+    
     try:
         # Search by code and company_id using raw SQL to avoid ORM field issues
         env.cr.execute("""
             SELECT id FROM account_journal 
             WHERE code = %s AND company_id = %s 
             LIMIT 1
-        """, ('LS', company_id))
+        """, (journal_code, company_id))
         
         result = env.cr.fetchone()
         if result:
             journal = env['account.journal'].sudo().browse(result[0])
-            _logger.info(f"Found existing 'Ledger Sync' journal ID {journal.id}")
+            _logger.info(f"Found existing journal with code '{journal_code}' and name '{account_name}' (ID {journal.id})")
             return journal
         
-        # Create new journal with code 'LS' and translatable name
-        journal = env['account.journal'].sudo().create({
-            'name': {'en_US': 'Ledger Sync'},
-            'code': 'LS',
-            'company_id': company_id,
-            'type': 'general'
-        })
-        _logger.info(f"Created new 'Ledger Sync' journal ID {journal.id}")
-        return journal
+        # Create new journal using raw SQL to avoid ORM validation issues with parent_path
+        import json
+        from datetime import datetime
+        
+        env.cr.execute("""
+            INSERT INTO account_journal 
+            (code, company_id, type, name, active, create_uid, write_uid, create_date, write_date,
+             invoice_reference_type, invoice_reference_model, multiple_invoice_type, text_position)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (journal_code, company_id, 'general', json.dumps({'en_US': account_name}), True, 1, 1,
+              datetime.now(), datetime.now(), 'none', 'odoo', 'multi', 'after'))
+        
+        result = env.cr.fetchone()
+        if result:
+            journal_id = result[0]
+            env.cr.commit()
+            journal = env['account.journal'].sudo().browse(journal_id)
+            _logger.info(f"Created new journal with code '{journal_code}' and name '{account_name}' (ID {journal.id})")
+            return journal
+        
+        raise Exception("Failed to create journal - no ID returned")
     except Exception as e:
-        _logger.error(f"Failed to get/create 'Ledger Sync' journal: {str(e)}")
+        _logger.error(f"Failed to get/create journal for account '{account_name}': {str(e)}")
         raise
 
 
@@ -280,11 +305,27 @@ def process_transaction(payload):
     company_id = get_company_id(env)
     _logger.info(f"Processing transaction {payload.get('transactionReference')}")
 
+    # Get account name from the first account for journal naming
+    account_name = None
     try:
-        journal = create_or_get_ledger_sync_journal(env, company_id)
+        first_account_id = next(iter(all_account_ids))
+        env.cr.execute("""
+            SELECT account_name FROM custom_account_entry 
+            WHERE account_code = %s
+            LIMIT 1
+        """, (str(first_account_id),))
+        result = env.cr.fetchone()
+        if result:
+            account_name = result[0]
+            _logger.debug(f"Retrieved account name '{account_name}' for journal creation")
+    except Exception as e:
+        _logger.warning(f"Could not retrieve account name for journal: {str(e)}")
+    
+    try:
+        journal = create_or_get_ledger_sync_journal(env, company_id, account_name)
     except Exception as e:
         _logger.error(f"Failed to get journal: {str(e)}")
-        return {'status': 'error', 'message': f"Failed to get 'Ledger Sync' journal: {str(e)}"}
+        return {'status': 'error', 'message': f"Failed to get journal: {str(e)}"}
     
     if not journal:
         return {'status': 'error', 'message': "No journal available"}
