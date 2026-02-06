@@ -347,15 +347,13 @@ def process_transaction(payload):
     except Exception as e:
         _logger.warning(f"Could not check for existing transaction: {str(e)}")
 
-    # Safe access to journal attributes
+    # Use journal ID and account name for transaction naming
     try:
         journal_id = journal.id
-        # Use code field which exists on account.journal, or fallback to a constructed name
-        journal_name = getattr(journal, 'code', f'Journal {journal_id}')
-        if not journal_name:
-            journal_name = f'Journal {journal_id}'
+        # Use the account_name we already retrieved, or fallback to transaction reference
+        journal_name = account_name if account_name else transaction_reference
     except Exception as e:
-        _logger.error(f"Error accessing journal attributes: {e}")
+        _logger.error(f"Error accessing journal ID: {e}")
         return {'status': 'error', 'message': f"Error accessing journal: {str(e)}"}
 
     line_ids = _prepare_line_ids(payload, id_mapping, env)
