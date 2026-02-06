@@ -55,8 +55,16 @@ def get_company_id(env):
             return env.user.company_id.id
     except:
         pass
-    # Fallback: get first active company
-    return env['res.company'].search([], limit=1).id
+    # Fallback: get first active company using raw SQL to avoid ORM issues
+    try:
+        env.cr.execute("SELECT id FROM res_company WHERE active = true ORDER BY id LIMIT 1")
+        result = env.cr.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        _logger.warning(f"Failed to get company from SQL: {e}")
+    # Last resort: return 1
+    return 1
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
@@ -69,14 +77,30 @@ def create_or_get_ledger_sync_journal(env, company_id):
         return _journal_cache[cache_key]
     
     journal_code = 'LS'  # 2 chars, safely under 5 char limit
-    existing_journal = env['account.journal'].sudo().search([
-        ('company_id', '=', company_id),
-        ('code', '=', journal_code)
-    ], limit=1)
-
-    if existing_journal:
-        _journal_cache[cache_key] = existing_journal
-        return existing_journal
+    # Use raw SQL to avoid ORM field resolution issues with company_id
+    try:
+        env.cr.execute("""
+            SELECT id FROM account_journal 
+            WHERE company_id = %s AND code = %s
+            LIMIT 1
+        """, (company_id, journal_code))
+        result = env.cr.fetchone()
+        if result:
+            existing_journal = env['account.journal'].sudo().browse(result[0])
+            _journal_cache[cache_key] = existing_journal
+            return existing_journal
+    except Exception as e:
+        _logger.warning(f"Failed to search journal with SQL: {e}")
+        # Fallback to ORM search
+        try:
+            existing_journal = env['account.journal'].sudo().search([
+                ('code', '=', journal_code)
+            ], limit=1)
+            if existing_journal and existing_journal.company_id.id == company_id:
+                _journal_cache[cache_key] = existing_journal
+                return existing_journal
+        except Exception as e2:
+            _logger.warning(f"ORM fallback also failed: {e2}")
 
     journal_id = env['account.journal'].sudo().create({
         'name': {'en_US': 'Ledger Sync'},  # JSONB format for translatable field

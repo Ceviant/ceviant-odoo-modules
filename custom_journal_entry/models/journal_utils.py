@@ -55,14 +55,17 @@ def get_env():
 
 def get_company_id(env):
     """Retrieve the company_id for the current context in Odoo."""
-    # Explicitly search for the first company instead of using env.company
-    # to avoid context resolution issues with res.users in RabbitMQ threads
+    # Use raw SQL to avoid field resolution issues with res.company model
     try:
-        # Use search with empty domain to avoid field resolution issues
-        # Note: Using empty search list [] is safer than specifying 'id' field in domain
-        first_company = env['res.company'].sudo().search([])
-        if first_company:
-            company_id = first_company[0].id
+        # Query the company table directly to avoid ORM field issues
+        env.cr.execute("""
+            SELECT id FROM res_company 
+            WHERE active = true 
+            ORDER BY id LIMIT 1
+        """)
+        result = env.cr.fetchone()
+        if result:
+            company_id = result[0]
             _logger.debug(f"Found company ID: {company_id}")
             return company_id
         else:
@@ -83,13 +86,16 @@ def create_or_get_ledger_sync_journal(env, company_id):
     Journal code is unique per company and limited to 5 chars.
     """
     try:
-        # Search by code which is a varchar field and unique per company
-        journal = env['account.journal'].sudo().search([
-            ('company_id', '=', company_id),
-            ('code', '=', 'LS')
-        ], limit=1)
+        # Search by code and company_id using raw SQL to avoid ORM field issues
+        env.cr.execute("""
+            SELECT id FROM account_journal 
+            WHERE code = %s AND company_id = %s 
+            LIMIT 1
+        """, ('LS', company_id))
         
-        if journal:
+        result = env.cr.fetchone()
+        if result:
+            journal = env['account.journal'].sudo().browse(result[0])
             _logger.info(f"Found existing 'Ledger Sync' journal ID {journal.id}")
             return journal
         
@@ -138,10 +144,17 @@ def _create_custom_entry_lines(env, custom_journal_entry, payload):
             _logger.error(f"Error creating custom debit line for account_id: {account_id}. Error: {e}")
 
 
-def _create_account_move_lines(env, existing_entry, payload):
-    """Create account move lines for both credits and debits."""
+def _create_account_move_lines(env, existing_entry, payload, id_mapping=None):
+    """Create account move lines for both credits and debits.
+    
+    id_mapping: Optional dict mapping original account IDs to Odoo account IDs.
+                If provided, uses mapped IDs; otherwise uses original IDs.
+    """
     for credit in payload.get('credits', []):
         account_id = credit.get('glAccountId')
+        # Use mapped account ID if available, otherwise use original
+        if id_mapping and account_id in id_mapping:
+            account_id = id_mapping[account_id]
         amount = credit.get('amount')
         _logger.debug(f"Creating credit line for account_id: {account_id} with amount: {amount}")
         try:
@@ -156,6 +169,9 @@ def _create_account_move_lines(env, existing_entry, payload):
 
     for debit in payload.get('debits', []):
         account_id = debit.get('glAccountId')
+        # Use mapped account ID if available, otherwise use original
+        if id_mapping and account_id in id_mapping:
+            account_id = id_mapping[account_id]
         amount = debit.get('amount')
         _logger.debug(f"Creating debit line for account_id: {account_id} with amount: {amount}")
         try:
@@ -169,24 +185,31 @@ def _create_account_move_lines(env, existing_entry, payload):
             _logger.error(f"Error creating debit line for account_id: {account_id}. Error: {e}")
 
 
-def _prepare_line_ids(payload, valid_account_ids, env):
-    """Prepare the line items for the transaction."""
+def _prepare_line_ids(payload, account_id_mapping, env):
+    """Prepare the line items for the transaction.
+    
+    account_id_mapping: Dict mapping original account IDs to Odoo account IDs
+    """
     lines = []
 
     # Prepare credit lines
     for credit in payload.get('credits', []):
-        if credit['glAccountId'] in valid_account_ids:
+        original_id = credit['glAccountId']
+        if original_id in account_id_mapping:
+            odoo_account_id = account_id_mapping[original_id]
             lines.append((0, 0, {
-                'account_id': credit['glAccountId'],
+                'account_id': odoo_account_id,
                 'credit': credit['amount'],
                 'debit': 0
             }))
 
     # Prepare debit lines
     for debit in payload.get('debits', []):
-        if debit['glAccountId'] in valid_account_ids:
+        original_id = debit['glAccountId']
+        if original_id in account_id_mapping:
+            odoo_account_id = account_id_mapping[original_id]
             lines.append((0, 0, {
-                'account_id': debit['glAccountId'],
+                'account_id': odoo_account_id,
                 'credit': 0,
                 'debit': debit['amount']
             }))
@@ -228,23 +251,17 @@ def process_transaction(payload):
     all_account_ids = set(credits + debits)
     _logger.info(f"All account IDs {all_account_ids}")
 
-    valid_account_ids = validate_account_ids(env, all_account_ids)
-    _logger.info(f"Valid account IDs found: {valid_account_ids}")
+    id_mapping = validate_account_ids(env, all_account_ids)
+    _logger.info(f"Account ID mapping: {id_mapping}")
     
-    # Log which accounts could not be validated
-    invalid_ids = all_account_ids - valid_account_ids
-    if invalid_ids:
-        _logger.warning(f"Some account IDs could not be validated: {invalid_ids}. "
-                       f"They may be custom account entries or need to be created.")
+    # Check if all accounts could be mapped
+    unmapped_ids = all_account_ids - set(id_mapping.keys())
+    if unmapped_ids:
+        error_message = f"Account validation failed. These account IDs could not be found: {unmapped_ids}"
+        _logger.error(error_message)
+        return {'status': 'error', 'message': error_message}
     
-    # Use whatever valid IDs we found; if none exist, we'll still try to process
-    # using the original IDs in case they represent custom accounts
-    if valid_account_ids:
-        account_ids_to_use = valid_account_ids
-        _logger.info(f"Using {len(valid_account_ids)} validated account IDs")
-    else:
-        account_ids_to_use = all_account_ids
-        _logger.warning(f"No account IDs could be validated. Will attempt to use all {len(all_account_ids)} account IDs as-is.")
+    _logger.info(f"All accounts validated and mapped successfully")
 
     transaction_date_str = payload.get("transactionDate")
     try:
@@ -283,7 +300,7 @@ def process_transaction(payload):
         _logger.error(f"Error accessing journal attributes: {e}")
         return {'status': 'error', 'message': f"Error accessing journal: {str(e)}"}
 
-    line_ids = _prepare_line_ids(payload, account_ids_to_use, env)
+    line_ids = _prepare_line_ids(payload, id_mapping, env)
 
     transaction_data = {
         "journal_id": journal_id,
@@ -408,7 +425,17 @@ def update_journal_entry_in_database(payload):
         # Unlink existing lines in Odoo
         _logger.debug(f"Unlinking existing move lines for entry: {existing_entry.id}")
         existing_entry.line_ids.unlink()
-        _create_account_move_lines(env, existing_entry, payload)
+        
+        # Validate and map account IDs for update
+        all_account_ids = set([c.get('glAccountId') for c in payload.get('credits', [])] + 
+                              [d.get('glAccountId') for d in payload.get('debits', [])])
+        id_mapping = validate_account_ids(env, all_account_ids)
+        if not id_mapping or len(id_mapping) != len(all_account_ids):
+            unmapped = all_account_ids - set(id_mapping.keys())
+            _logger.error(f"Account validation failed during update for IDs: {unmapped}")
+            return {'status': 'error', 'message': f"Account validation failed for IDs: {unmapped}"}
+        
+        _create_account_move_lines(env, existing_entry, payload, id_mapping)
 
         # Check final balance
         total_debits_existing = sum(line.debit for line in existing_entry.line_ids)
