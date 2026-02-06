@@ -331,14 +331,21 @@ def process_transaction(payload):
         return {'status': 'error', 'message': "No journal available"}
 
     transaction_reference = payload.get("transactionReference")
-    existing_transaction = env["account.move"].search([
-        ("ref", "=", transaction_reference)
-    ], limit=1)
-
-    if existing_transaction:
-        error_message = f"Transaction with reference '{transaction_reference}' already exists."
-        _logger.error(error_message)
-        return {'status': 'error', 'message': error_message}
+    
+    # Check if transaction already exists using raw SQL
+    try:
+        env.cr.execute("""
+            SELECT id FROM account_move 
+            WHERE name = %s OR ref = %s
+            LIMIT 1
+        """, (transaction_reference, transaction_reference))
+        existing_result = env.cr.fetchone()
+        if existing_result:
+            error_message = f"Transaction with reference '{transaction_reference}' already exists."
+            _logger.error(error_message)
+            return {'status': 'error', 'message': error_message}
+    except Exception as e:
+        _logger.warning(f"Could not check for existing transaction: {str(e)}")
 
     # Safe access to journal attributes
     try:
@@ -425,7 +432,18 @@ def update_journal_entry_in_database(payload):
         _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
         return {'status': 'error', 'message': 'Invalid transaction date format.'}
 
-    existing_entry = env['account.move'].sudo().search([('ref', '=', transaction_reference)], limit=1)
+    existing_entry = None
+    try:
+        env.cr.execute("""
+            SELECT id FROM account_move 
+            WHERE name = %s OR ref = %s
+            LIMIT 1
+        """, (transaction_reference, transaction_reference))
+        result = env.cr.fetchone()
+        if result:
+            existing_entry = env['account.move'].sudo().browse(result[0])
+    except Exception as e:
+        _logger.error(f"Error searching for existing transaction: {str(e)}")
 
     if not existing_entry:
         _logger.error(f"No journal entry found with reference: {transaction_reference}")
