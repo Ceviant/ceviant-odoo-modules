@@ -224,8 +224,9 @@ def _prepare_line_ids(payload, account_id_mapping, env):
             odoo_account_id = account_id_mapping[original_id]
             lines.append((0, 0, {
                 'account_id': odoo_account_id,
+                'name': '/',
                 'credit': credit['amount'],
-                'debit': 0
+                'debit': 0,
             }))
 
     # Prepare debit lines
@@ -235,8 +236,9 @@ def _prepare_line_ids(payload, account_id_mapping, env):
             odoo_account_id = account_id_mapping[original_id]
             lines.append((0, 0, {
                 'account_id': odoo_account_id,
+                'name': '/',
                 'credit': 0,
-                'debit': debit['amount']
+                'debit': debit['amount'],
             }))
 
     return lines
@@ -297,7 +299,8 @@ def process_transaction(payload):
 
     transaction_date_str = payload.get("transactionDate")
     try:
-        transaction_date = datetime.strptime(transaction_date_str, "%d/%m/%Y").strftime("%Y-%m-%d")
+        transaction_date_obj = datetime.strptime(transaction_date_str, "%d/%m/%Y")
+        transaction_date = transaction_date_obj.strftime("%Y-%m-%d")
     except (ValueError, TypeError) as e:
         _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
         return {'status': 'error', 'message': "Invalid transaction date format"}
@@ -350,11 +353,27 @@ def process_transaction(payload):
     # Use journal ID and account name for transaction naming
     try:
         journal_id = journal.id
-        # Use the account_name we already retrieved, or fallback to transaction reference
-        journal_name = account_name if account_name else transaction_reference
+        journal_code = journal.code
+        
+        # Generate move name in format: JOURNAL_CODE/YEAR/MONTH/SEQUENCE
+        year = transaction_date_obj.year
+        month = str(transaction_date_obj.month).zfill(2)
+        
+        # Get the next sequence number for this journal/year/month
+        env.cr.execute("""
+            SELECT COUNT(*) FROM account_move 
+            WHERE journal_id = %s 
+            AND DATE_PART('year', date) = %s 
+            AND DATE_PART('month', date) = %s
+        """, (journal_id, year, transaction_date_obj.month))
+        
+        sequence_num = (env.cr.fetchone()[0] + 1)
+        move_name = f"{journal_code}/{year}/{month}/{str(sequence_num).zfill(4)}"
+        
+        _logger.debug(f"Generated move name: {move_name}")
     except Exception as e:
-        _logger.error(f"Error accessing journal ID: {e}")
-        return {'status': 'error', 'message': f"Error accessing journal: {str(e)}"}
+        _logger.error(f"Error generating move name: {e}")
+        return {'status': 'error', 'message': f"Error generating move name: {str(e)}"}
 
     line_ids = _prepare_line_ids(payload, id_mapping, env)
 
@@ -363,16 +382,22 @@ def process_transaction(payload):
         "company_id": company_id,
         "date": transaction_date,
         "ref": payload.get("transactionReference"),
-        "name": journal_name,
+        "name": move_name,
         "currency_id": currency_id,
-        "line_ids": line_ids,
     }
 
     _logger.debug(f"Transaction data: {transaction_data}")
 
     try:
+        # Create move WITHOUT lines first
         transaction_id = env["account.move"].create(transaction_data)
-        _logger.info(f"Transaction {transaction_id} created in Odoo")
+        _logger.info(f"Transaction {transaction_id.id} created in Odoo")
+        
+        # Then add lines using the move_id relationship
+        for line in line_ids:
+            line[2]['move_id'] = transaction_id.id
+        
+        env["account.move.line"].create([line[2] for line in line_ids])
         _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
 
         custom_journal_entry = env["custom.journal.entry"].create({
