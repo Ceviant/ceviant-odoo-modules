@@ -388,21 +388,15 @@ def process_transaction(payload):
         "ref": payload.get("transactionReference"),
         "name": move_name,
         "currency_id": currency_id,
+        "line_ids": line_ids,
     }
 
     _logger.debug(f"Transaction data: {transaction_data}")
 
     try:
-        # Create move WITHOUT lines first
+        # Create move with lines in one operation
         transaction_id = env["account.move"].create(transaction_data)
-        _logger.info(f"Transaction {transaction_id.id} created in Odoo")
-        
-        # Then add lines using the move_id relationship
-        for line in line_ids:
-            line[2]['move_id'] = transaction_id.id
-        
-        env["account.move.line"].create([line[2] for line in line_ids])
-        _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
+        _logger.info(f"Transaction {transaction_id.id} created in Odoo with {len(line_ids)} lines")
 
         custom_journal_entry = env["custom.journal.entry"].create({
             "branch_id": payload.get("branchId"),
