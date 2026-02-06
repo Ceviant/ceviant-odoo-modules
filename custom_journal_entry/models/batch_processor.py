@@ -3,8 +3,7 @@ import pika
 import json
 import logging
 from odoo import models, api
-from .journal_utils import process_transaction, update_journal_entry_in_database
-from .account_utils import create_account
+from .journal_utils import process_transaction
 import time
 
 logging.basicConfig(level=logging.DEBUG)
@@ -35,24 +34,6 @@ class BatchProcessor(models.Model):
                     logging.error(f"Batch {batch_ref} error: {result.get('message')}")
                     self.retry_or_move_to_failure_queue(ch, method, body, retry_count, queue_type)
             
-            elif queue_type == 'odoo_account_queue':
-                result, error = create_account(payload)
-                if error or not result:
-                    logging.error(f"Batch {batch_ref} account error: {error}")
-                    self.retry_or_move_to_failure_queue(ch, method, body, retry_count, queue_type)
-                else:
-                    logging.info(f"Batch {batch_ref} account success")
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-            
-            elif queue_type == 'odoo_update_journal_queue':
-                result = update_journal_entry_in_database(payload)
-                if result.get('status') == 'success':
-                    logging.info(f"Batch {batch_ref} update success")
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                else:
-                    logging.error(f"Batch {batch_ref} update error: {result.get('message')}")
-                    self.retry_or_move_to_failure_queue(ch, method, body, retry_count, queue_type)
-            
             else:
                 logging.error(f"Batch {batch_ref} unknown queue {queue_type}")
                 ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
@@ -79,16 +60,9 @@ class BatchProcessor(models.Model):
             ch.basic_publish(exchange='', routing_key=queue_type, body=body)
             ch.basic_ack(delivery_tag=method.delivery_tag)
         else:
-            failure_queue = {
-                'odoo_transaction_queue': 'odoo_transaction_failure_queue',
-                'odoo_account_queue': 'odoo_account_failure_queue',
-                'odoo_update_journal_queue': 'odoo_update_journal_failure_queue'
-            }.get(queue_type)
-            
-            if failure_queue:
-                logging.error(f"Batch {batch_ref} moved to DLQ: {failure_queue}")
-                ch.basic_publish(exchange='', routing_key=failure_queue, body=body)
-            
+            failure_queue = 'odoo_transaction_failure_queue'
+            logging.error(f"Batch {batch_ref} moved to DLQ: {failure_queue}")
+            ch.basic_publish(exchange='', routing_key=failure_queue, body=body)
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def fetch_and_process_messages(self):
@@ -109,22 +83,17 @@ class BatchProcessor(models.Model):
             connection = pika.BlockingConnection(connection_parameters)
             channel = connection.channel()
             channel.queue_declare(queue='odoo_transaction_queue', durable=True)
-            channel.queue_declare(queue='odoo_account_queue', durable=True)
-            channel.queue_declare(queue='odoo_update_journal_queue', durable=True)
             channel.queue_declare(queue='odoo_transaction_failure_queue', durable=True)
-            channel.queue_declare(queue='odoo_account_failure_queue', durable=True)
-            channel.queue_declare(queue='odoo_update_journal_failure_queue', durable=True)
 
             # Set QoS to process one message at a time
             channel.basic_qos(prefetch_count=1)
             
-            # Set up continuous consumers
-            for queue_name in ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']:
-                channel.basic_consume(
-                    queue=queue_name,
-                    on_message_callback=self.process_message,
-                    auto_ack=False
-                )
+            # Set up continuous consumer
+            channel.basic_consume(
+                queue='odoo_transaction_queue',
+                on_message_callback=self.process_message,
+                auto_ack=False
+            )
             
             logging.info("Consumer started, waiting for messages...")
             channel.start_consuming()
