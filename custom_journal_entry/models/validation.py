@@ -115,11 +115,12 @@ def validate_account_ids(env, account_ids):
         try:
             # Search for custom account entries with the given account_id values
             # This maps the custom account IDs to the corresponding Odoo account.account records
+            # Note: custom_id is converted to string since custom.account.entry.account_id is a Char field
             for custom_id in invalid_ids:
                 try:
                     custom_entries = env['custom.account.entry'].sudo().search([
                         ('account_id', '=', str(custom_id))
-                    ])
+                    ], limit=10)
                     
                     if custom_entries:
                         _logger.debug(f"Found custom account entry for ID {custom_id}")

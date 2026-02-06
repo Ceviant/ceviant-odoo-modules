@@ -59,9 +59,10 @@ def get_company_id(env):
     # to avoid context resolution issues with res.users in RabbitMQ threads
     try:
         # Use search with empty domain to avoid field resolution issues
-        first_company = env['res.company'].sudo().search([], limit=1, order='id asc')
+        # Note: Using empty search list [] is safer than specifying 'id' field in domain
+        first_company = env['res.company'].sudo().search([])
         if first_company:
-            company_id = first_company.id
+            company_id = first_company[0].id
             _logger.debug(f"Found company ID: {company_id}")
             return company_id
         else:
@@ -78,18 +79,18 @@ def get_company_id(env):
 def create_or_get_ledger_sync_journal(env, company_id):
     """Get or create 'Ledger Sync' journal."""
     try:
-        # Try to find existing journal
-        journal = env['account.journal'].search([
-            ('name', '=', 'Ledger Sync'),
-            ('company_id', '=', company_id)
+        # Try to find existing journal using sudo() to bypass access restrictions
+        journal = env['account.journal'].sudo().search([
+            ('company_id', '=', company_id),
+            ('name', '=', 'Ledger Sync')
         ], limit=1)
         
         if journal:
-            _logger.info(f"Found existing journal ID {journal[0].id}")
-            return journal[0]
+            _logger.info(f"Found existing journal ID {journal.id}")
+            return journal
         
-        # Create new journal
-        journal = env['account.journal'].create({
+        # Create new journal with sudo() context
+        journal = env['account.journal'].sudo().create({
             'name': 'Ledger Sync',
             'company_id': company_id,
             'type': 'general'
