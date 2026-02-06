@@ -80,14 +80,19 @@ def validate_account_ids(env, account_ids):
     
     First checks if the IDs exist directly in account.account.
     If not found, attempts to map them from custom.account.entry.
+    Returns gracefully even if validation fails to prevent app shutdown.
     """
     if not account_ids:
         _logger.warning("No account IDs provided for validation")
         return set()
     
-    # Convert all IDs to integers to handle float/string inputs from JSON
-    account_id_list = [int(id) for id in account_ids if id is not None]
-    _logger.debug(f"Validating account IDs: {account_id_list}")
+    try:
+        # Convert all IDs to integers to handle float/string inputs from JSON
+        account_id_list = [int(id) for id in account_ids if id is not None]
+        _logger.debug(f"Validating account IDs: {account_id_list}")
+    except (ValueError, TypeError) as e:
+        _logger.error(f"Error converting account IDs to integers: {e}. Returning empty set.")
+        return set()
     
     valid_ids = set()
     
@@ -111,29 +116,32 @@ def validate_account_ids(env, account_ids):
             # Search for custom account entries with the given account_id values
             # This maps the custom account IDs to the corresponding Odoo account.account records
             for custom_id in invalid_ids:
-                custom_entries = env['custom.account.entry'].sudo().search([
-                    ('account_id', '=', str(custom_id))
-                ])
-                
-                if custom_entries:
-                    _logger.debug(f"Found custom account entry for ID {custom_id}")
-                    # Try to find corresponding Odoo accounts by code
-                    for entry in custom_entries:
-                        try:
-                            odoo_account = env['account.account'].sudo().search([
-                                ('code', '=', entry.account_code)
-                            ], limit=1)
-                            if odoo_account:
-                                valid_ids.add(odoo_account.id)
-                                _logger.info(f"Mapped custom account {entry.account_id} (code: {entry.account_code}) to Odoo account {odoo_account.id}")
-                            else:
-                                _logger.warning(f"Could not find Odoo account for custom account {entry.account_id} with code {entry.account_code}")
-                        except Exception as e:
-                            _logger.warning(f"Error searching for Odoo account with code {entry.account_code}: {str(e)}")
-                else:
-                    _logger.debug(f"No custom account entry found for ID {custom_id}")
+                try:
+                    custom_entries = env['custom.account.entry'].sudo().search([
+                        ('account_id', '=', str(custom_id))
+                    ])
+                    
+                    if custom_entries:
+                        _logger.debug(f"Found custom account entry for ID {custom_id}")
+                        # Try to find corresponding Odoo accounts by code
+                        for entry in custom_entries:
+                            try:
+                                odoo_account = env['account.account'].sudo().search([
+                                    ('code', '=', entry.account_code)
+                                ], limit=1)
+                                if odoo_account:
+                                    valid_ids.add(odoo_account.id)
+                                    _logger.info(f"Mapped custom account {entry.account_id} (code: {entry.account_code}) to Odoo account {odoo_account.id}")
+                                else:
+                                    _logger.warning(f"Could not find Odoo account for custom account {entry.account_id} with code {entry.account_code}")
+                            except Exception as e:
+                                _logger.warning(f"Error searching for Odoo account with code {getattr(entry, 'account_code', 'unknown')}: {str(e)}")
+                    else:
+                        _logger.debug(f"No custom account entry found for ID {custom_id}")
+                except Exception as e:
+                    _logger.warning(f"Error searching custom account entry for ID {custom_id}: {str(e)}")
         except Exception as e:
-            _logger.warning(f"Error searching custom account entries: {str(e)}")
+            _logger.warning(f"Error in custom account mapping: {str(e)}. Will continue with available valid IDs.")
     
     remaining_invalid = set(account_id_list) - valid_ids
     if remaining_invalid:

@@ -58,17 +58,21 @@ def get_company_id(env):
     # Explicitly search for the first company instead of using env.company
     # to avoid context resolution issues with res.users in RabbitMQ threads
     try:
-        first_company = env['res.company'].sudo().search([], limit=1)
+        # Use search with empty domain to avoid field resolution issues
+        first_company = env['res.company'].sudo().search([], limit=1, order='id asc')
         if first_company:
             company_id = first_company.id
             _logger.debug(f"Found company ID: {company_id}")
             return company_id
         else:
             _logger.error("No company found in the system")
-            raise RuntimeError("No company found in the system")
+            # Return default company ID instead of raising
+            _logger.warning("Using default company ID: 1")
+            return 1
     except Exception as e:
-        _logger.error(f"Failed to get company ID: {e}")
-        raise RuntimeError(f"Cannot retrieve company ID: {str(e)}")
+        _logger.error(f"Failed to get company ID: {str(e)}. Using default company ID: 1")
+        # Return default instead of raising to prevent app shutdown
+        return 1
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
