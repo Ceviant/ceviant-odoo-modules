@@ -60,9 +60,9 @@ class BatchProcessor(models.Model):
             ch.basic_publish(exchange='', routing_key=queue_type, body=body)
             ch.basic_ack(delivery_tag=method.delivery_tag)
         else:
-            failure_queue = 'odoo_transaction_failure_queue'
-            logging.error(f"Batch {batch_ref} moved to DLQ: {failure_queue}")
-            ch.basic_publish(exchange='', routing_key=failure_queue, body=body)
+            dead_queue = 'odoo_transaction_queue_dead'
+            logging.error(f"Batch {batch_ref} moved to DLQ: {dead_queue}")
+            ch.basic_publish(exchange='', routing_key=dead_queue, body=body)
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def fetch_and_process_messages(self):
@@ -83,7 +83,7 @@ class BatchProcessor(models.Model):
             connection = pika.BlockingConnection(connection_parameters)
             channel = connection.channel()
             channel.queue_declare(queue='odoo_transaction_queue', durable=True)
-            channel.queue_declare(queue='odoo_transaction_failure_queue', durable=True)
+            channel.queue_declare(queue='odoo_transaction_queue_dead', durable=True)
 
             # Set QoS to process one message at a time
             channel.basic_qos(prefetch_count=1)
