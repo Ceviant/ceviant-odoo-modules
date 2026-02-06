@@ -78,21 +78,21 @@ def validate_account_entry(payload):
 def validate_account_ids(env, account_ids):
     """Validate and map account IDs to Odoo account IDs.
     
-    Accepts glAccountId values (which are account codes) from journal entry,
-    queries custom_account_entry by account_code, retrieves account_ids,
+    The glAccountId values from journal entry are actually account codes (425, 680, etc).
+    This function queries custom_account_entry by account_code, retrieves the account_id values,
     and maps them to Odoo account IDs.
-    Returns a mapping of {original_id: odoo_account_id} for accounts that could be found.
+    Returns a mapping of {glAccountId: odoo_account_id} for accounts that could be found.
     """
     if not account_ids:
         _logger.warning("No account IDs provided for validation")
         return {}
     
     try:
-        # Convert to strings for account code matching
+        # glAccountId values are account codes, convert to strings
         account_code_list = [str(id) for id in account_ids if id is not None]
-        _logger.info(f"Validating account codes: {account_code_list}")
+        _logger.info(f"Validating account codes (glAccountId): {account_code_list}")
     except (ValueError, TypeError) as e:
-        _logger.error(f"Error converting account IDs to strings: {e}")
+        _logger.error(f"Error converting account codes to strings: {e}")
         return {}
     
     id_mapping = {}
@@ -106,18 +106,18 @@ def validate_account_ids(env, account_ids):
         custom_accounts = env.cr.fetchall()
         _logger.info(f"Found {len(custom_accounts)} custom account entries for codes {account_code_list}")
         
-        # Build a mapping of account_code to custom account_id
-        custom_account_map = {row[1]: row[0] for row in custom_accounts}
-        _logger.debug(f"Custom account mapping: {custom_account_map}")
+        # Build a mapping of account_code to account_code (for reference)
+        custom_account_map = {row[1]: row[1] for row in custom_accounts}
+        _logger.debug(f"Custom account mapping (code -> code): {custom_account_map}")
     except Exception as e:
         _logger.error(f"Error querying custom_account_entry: {e}")
         custom_account_map = {}
     
-    # Validate provided account codes and map to Odoo
+    # Validate provided account codes and map to Odoo accounts
     for original_id in account_ids:
         code_str = str(original_id)
         
-        # First, try to find accounts directly in account.account
+        # First, try to find accounts directly in account.account by ID
         try:
             existing = env['account.account'].sudo().search([('id', '=', original_id)], limit=1)
             if existing:
@@ -129,8 +129,7 @@ def validate_account_ids(env, account_ids):
         
         # Check if account_code exists in custom_account_entry
         if code_str in custom_account_map:
-            custom_account_id = custom_account_map[code_str]
-            _logger.info(f"Found custom account entry for code {code_str} with account_id {custom_account_id}")
+            _logger.info(f"Found custom account entry for account_code {code_str}")
             
             # Find the corresponding Odoo account by code
             try:
@@ -139,9 +138,9 @@ def validate_account_ids(env, account_ids):
                 ], limit=1)
                 if odoo_account:
                     id_mapping[original_id] = odoo_account.id
-                    _logger.info(f"Mapped account code {code_str} to Odoo account {odoo_account.id}")
+                    _logger.info(f"Mapped glAccountId {original_id} (account_code: {code_str}) to Odoo account {odoo_account.id}")
                 else:
-                    _logger.warning(f"Custom account with code {code_str} found, but no Odoo account found")
+                    _logger.warning(f"Account code {code_str} found in custom_account_entry, but no Odoo account found")
             except Exception as e:
                 _logger.error(f"Error searching for Odoo account with code {code_str}: {str(e)}")
         else:
@@ -149,7 +148,7 @@ def validate_account_ids(env, account_ids):
     
     unmapped = [aid for aid in account_ids if aid not in id_mapping]
     if unmapped:
-        _logger.error(f"Account validation failed for codes: {unmapped}")
+        _logger.error(f"Account validation failed for glAccountIds: {unmapped}")
     
     _logger.info(f"Account validation complete. Mapped {len(id_mapping)} of {len(account_ids)} accounts")
     return id_mapping
