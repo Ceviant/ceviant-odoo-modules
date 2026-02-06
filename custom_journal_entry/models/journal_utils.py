@@ -353,7 +353,11 @@ def process_transaction(payload):
     # Use journal ID and account name for transaction naming
     try:
         journal_id = journal.id
-        journal_code = journal.code
+        
+        # Get journal code from database using raw SQL
+        env.cr.execute("SELECT code FROM account_journal WHERE id = %s", (journal_id,))
+        result = env.cr.fetchone()
+        journal_code = result[0] if result else 'JNL'
         
         # Generate move name in format: JOURNAL_CODE/YEAR/MONTH/SEQUENCE
         year = transaction_date_obj.year
