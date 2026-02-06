@@ -419,8 +419,8 @@ def process_transaction(payload):
         env.cr.commit()
         _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
 
-        # Refresh to get updated line_ids
-        transaction_id.flush()
+        # Refresh environment to get updated line_ids
+        env.flush()
         
         # Create custom journal entry using ORM
         custom_journal_entry = env["custom.journal.entry"].create({
