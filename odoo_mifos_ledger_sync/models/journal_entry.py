@@ -31,16 +31,18 @@ class CustomJournalEntry(models.Model):
         domain=[('type', '=', 'debit')]
     )
 
-    @api.model
-    def create(self, vals):
+    @api.model_create_multi
+    def create(self, vals_list):
         """
         Override the create method to validate currency_id and ensure it's provided.
+        Supports both single and batch creation.
         """
-        if 'currency_id' not in vals or not vals['currency_id']:
-            raise ValidationError(_("currency_id must be provided."))
+        for vals in vals_list:
+            if 'currency_id' not in vals or not vals['currency_id']:
+                raise ValidationError(_("currency_id must be provided."))
 
-        # Call the parent create method to create the journal entry
-        return super(CustomJournalEntry, self).create(vals)
+        # Call the parent create method to create the journal entries
+        return super(CustomJournalEntry, self).create(vals_list)
 
 
 class CustomJournalEntryLine(models.Model):

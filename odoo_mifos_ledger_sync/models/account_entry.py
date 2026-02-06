@@ -1,4 +1,4 @@
-from odoo import models, fields, api
+from odoo import models, fields, api, _
 from odoo.exceptions import ValidationError
 import logging
 
@@ -20,7 +20,7 @@ class AccountEntry(models.Model):
         if not self.currency_id:
             raise ValidationError(_("Currency must be provided."))
 
-    @api.model
-    def create(self, vals):
-        _logger.info(f"Creating Account Entry with values: {vals}")
-        return super(AccountEntry, self).create(vals)
+    @api.model_create_multi
+    def create(self, vals_list):
+        _logger.info(f"Creating Account Entries (batch size: {len(vals_list)})")
+        return super(AccountEntry, self).create(vals_list)

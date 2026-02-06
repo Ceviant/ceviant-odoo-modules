@@ -245,10 +245,17 @@ class BatchProcessor(models.Model):
                 executor = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
                 
                 def callback(ch, method, properties, body):
-                    # Set queue type on method for handler routing
-                    method.routing_key = method.routing_key or self._infer_queue_type(body)
-                    # Process in thread pool (non-blocking)
-                    executor.submit(self.process_message, ch, method, body, 0)
+                    try:
+                        # Set queue type on method for handler routing
+                        method.routing_key = method.routing_key or self._infer_queue_type(body)
+                        # Process in thread pool (non-blocking)
+                        executor.submit(self.process_message, ch, method, body, 0)
+                    except Exception as callback_error:
+                        _logger.error(f"Error in callback function: {callback_error}", exc_info=True)
+                        try:
+                            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                        except Exception as nack_error:
+                            _logger.error(f"Failed to nack message: {nack_error}")
                 
                 queues = ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']
                 for queue_name in queues:
@@ -266,7 +273,14 @@ class BatchProcessor(models.Model):
                 _logger.info(f"✓ {consumer_id} is now READY and listening for messages\n")
                 
                 # This blocks until connection drops
-                channel.start_consuming()
+                try:
+                    channel.start_consuming()
+                except KeyboardInterrupt:
+                    _logger.info(f"{consumer_id} - Keyboard interrupt received")
+                    channel.stop_consuming()
+                except Exception as consume_error:
+                    _logger.error(f"{consumer_id} - Error during consuming: {consume_error}", exc_info=True)
+                    raise
                 
             except pika.exceptions.ConnectionClosedByBroker:
                 _logger.warning(f"{consumer_id} - Connection closed by broker, reconnecting in 5s...")

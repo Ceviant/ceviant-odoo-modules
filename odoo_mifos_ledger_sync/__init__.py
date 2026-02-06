@@ -29,8 +29,15 @@ def post_load_hook():
                 batch_processor = env['custom_journal_entry.batch_processor']
                 batch_processor.run_batch_processor()
                 _logger.info("✓ RabbitMQ consumer started on post_load")
+            except Exception as inner_e:
+                _logger.error(f"✗ Error starting batch processor: {inner_e}")
+                import traceback
+                _logger.error(traceback.format_exc())
             finally:
-                cr.close()
+                try:
+                    cr.close()
+                except Exception as close_e:
+                    _logger.warning(f"Warning closing cursor: {close_e}")
     except Exception as e:
         _logger.error(f"✗ Error in post_load_hook: {e}")
         import traceback
