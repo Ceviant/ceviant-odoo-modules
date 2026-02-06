@@ -75,7 +75,9 @@ class BatchProcessor(models.Model):
         if retry_count < MAX_RETRIES:
             logging.info(f"Batch {batch_ref} retry {retry_count + 1}/{MAX_RETRIES}")
             time.sleep(RETRY_DELAY)
-            self.process_message(ch, method, None, body, retry_count + 1)
+            # Requeue the message back to the original queue
+            ch.basic_publish(exchange='', routing_key=queue_type, body=body)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
         else:
             failure_queue = {
                 'odoo_transaction_queue': 'odoo_transaction_failure_queue',
@@ -90,7 +92,7 @@ class BatchProcessor(models.Model):
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def fetch_and_process_messages(self):
-        """Fetch messages from RabbitMQ (both queues) and process them gracefully."""
+        """Continuously listen for messages from RabbitMQ."""
         host = os.getenv("RABBITMQ_HOST")
         port = os.getenv("RABBITMQ_PORT")
         virtual_host = os.getenv("RABBITMQ_VHOST")
@@ -113,12 +115,20 @@ class BatchProcessor(models.Model):
             channel.queue_declare(queue='odoo_account_failure_queue', durable=True)
             channel.queue_declare(queue='odoo_update_journal_failure_queue', durable=True)
 
+            # Set QoS to process one message at a time
+            channel.basic_qos(prefetch_count=1)
+            
+            # Set up continuous consumers
             for queue_name in ['odoo_transaction_queue', 'odoo_account_queue', 'odoo_update_journal_queue']:
-                method_frame, _, body = channel.basic_get(queue=queue_name)
-                while method_frame:
-                    self.process_message(channel, method_frame, None, body)
-                    method_frame, _, body = channel.basic_get(queue=queue_name)
-
+                channel.basic_consume(
+                    queue=queue_name,
+                    on_message_callback=self.process_message,
+                    auto_ack=False
+                )
+            
+            logging.info("Consumer started, waiting for messages...")
+            channel.start_consuming()
+        
         except Exception as e:
             logging.error(f"RabbitMQ error: {str(e)}")
         finally:
