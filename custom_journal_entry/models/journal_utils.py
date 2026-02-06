@@ -76,74 +76,29 @@ def get_company_id(env):
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
-    """Check if 'Ledger Sync' journal exists, otherwise create it."""
-    journal_name = 'Ledger Sync'
-    journal_code = 'LEDGE'
-
-    existing_journal = None
-    
-    # Try to find journal by name first (more reliable)
+    """Get or create 'Ledger Sync' journal."""
     try:
-        existing_journal = env['account.journal'].search([
-            ('name', '=', journal_name),
+        # Try to find existing journal
+        journal = env['account.journal'].search([
+            ('name', '=', 'Ledger Sync'),
             ('company_id', '=', company_id)
         ], limit=1)
-        if existing_journal:
-            _logger.info(f"'Ledger Sync' journal already exists with ID {existing_journal[0].id}")
-            return existing_journal[0]
+        
+        if journal:
+            _logger.info(f"Found existing journal ID {journal[0].id}")
+            return journal[0]
+        
+        # Create new journal
+        journal = env['account.journal'].create({
+            'name': 'Ledger Sync',
+            'company_id': company_id,
+            'type': 'general'
+        })
+        _logger.info(f"Created new journal ID {journal.id}")
+        return journal
     except Exception as e:
-        _logger.warning(f"Could not search journal by name: {str(e)}")
-
-    # If not found by name, try searching all journals and filter in Python
-    if not existing_journal:
-        try:
-            all_journals = env['account.journal'].search([
-                ('company_id', '=', company_id)
-            ])
-            for journal in all_journals:
-                if journal.name == journal_name:
-                    _logger.info(f"'Ledger Sync' journal found with ID {journal.id}")
-                    return journal
-        except Exception as e:
-            _logger.warning(f"Could not search all journals: {str(e)}")
-
-    # Create the journal with minimal required fields
-    journal_data = {
-        'name': journal_name,
-        'company_id': company_id,
-    }
-    
-    # Try to add code if the field exists
-    try:
-        test_journal = env['account.journal'].search([], limit=1)
-        if test_journal and hasattr(test_journal[0], 'code'):
-            journal_data['code'] = journal_code
-    except:
-        pass
-    
-    # Try to add type if it's required
-    try:
-        journal_data['type'] = 'general'
-    except:
-        pass
-
-    try:
-        journal_id = env['account.journal'].create(journal_data)
-        _logger.info(f"'Ledger Sync' journal created with ID {journal_id.id}")
-        return journal_id
-    except Exception as e:
-        _logger.error(f"Failed to create 'Ledger Sync' journal: {str(e)}")
-        # Even if we can't create, try to return the first general journal as fallback
-        try:
-            fallback = env['account.journal'].search([
-                ('company_id', '=', company_id)
-            ], limit=1)
-            if fallback:
-                _logger.warning(f"Using fallback journal {fallback[0].id} instead")
-                return fallback[0]
-        except:
-            pass
-        return None
+        _logger.error(f"Failed to get/create journal: {str(e)}")
+        raise
 
 
 def _create_custom_entry_lines(env, custom_journal_entry, payload):
@@ -293,12 +248,16 @@ def process_transaction(payload):
         return {'status': 'error', 'message': "Invalid transaction date format"}
 
     company_id = get_company_id(env)
-    _logger.info(f"Company ID {company_id}")
+    _logger.info(f"Processing transaction {payload.get('transactionReference')}")
 
-    journal = create_or_get_ledger_sync_journal(env, company_id)
+    try:
+        journal = create_or_get_ledger_sync_journal(env, company_id)
+    except Exception as e:
+        _logger.error(f"Failed to get journal: {str(e)}")
+        return {'status': 'error', 'message': f"Failed to get 'Ledger Sync' journal: {str(e)}"}
+    
     if not journal:
-        _logger.error("Failed to retrieve or create the 'Ledger Sync' journal.")
-        return {'status': 'error', 'message': "Failed to retrieve or create 'Ledger Sync' journal"}
+        return {'status': 'error', 'message': "No journal available"}
 
     transaction_reference = payload.get("transactionReference")
     existing_transaction = env["account.move"].search([
@@ -314,25 +273,18 @@ def process_transaction(payload):
     try:
         journal_id = journal.id
         journal_name = getattr(journal, 'name', f'Journal {journal_id}')
-        _logger.info(f"Journal ID: {journal_id}, Journal Name: {journal_name}")
     except Exception as e:
         _logger.error(f"Error accessing journal attributes: {e}")
         return {'status': 'error', 'message': f"Error accessing journal: {str(e)}"}
 
     line_ids = _prepare_line_ids(payload, account_ids_to_use, env)
 
-    # Use journal name or code if available, fallback to journal ID
-    try:
-        journal_name_or_code = getattr(journal, 'code', None) or journal_name
-    except:
-        journal_name_or_code = journal_name
-
     transaction_data = {
         "journal_id": journal_id,
         "company_id": company_id,
         "date": transaction_date,
         "ref": payload.get("transactionReference"),
-        "name": f"{journal_name_or_code}",
+        "name": journal_name,
         "currency_id": currency_id,
         "line_ids": line_ids,
     }
