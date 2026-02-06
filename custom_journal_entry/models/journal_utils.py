@@ -346,9 +346,11 @@ def process_transaction(payload):
         if existing_result:
             error_message = f"Transaction with reference '{transaction_reference}' already exists."
             _logger.error(error_message)
+            env.cr.rollback()
             return {'status': 'error', 'message': error_message}
     except Exception as e:
         _logger.warning(f"Could not check for existing transaction: {str(e)}")
+        env.cr.rollback()
 
     # Use journal ID and account name for transaction naming
     try:
