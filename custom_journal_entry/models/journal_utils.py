@@ -509,6 +509,7 @@ def update_journal_entry_in_database(payload):
         if custom_journal_entry:
             try:
                 custom_journal_entry.write({
+                    "transaction_date": transaction_date,
                     "currency_id": currency_id,
                 })
                 _logger.info(f"Custom journal entry {custom_journal_entry.id} updated successfully.")
