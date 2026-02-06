@@ -121,14 +121,20 @@ def validate_account_ids(env, account_ids):
         if code_str in custom_account_map:
             _logger.info(f"Found custom account entry for account_code {code_str}")
             
-            # Find the corresponding Odoo account by code
+            # Find the corresponding Odoo account by code using raw SQL
+            # The 'code' field in account_account might not be searchable via ORM
             try:
-                odoo_account = env['account.account'].sudo().search([
-                    ('code', '=', code_str)
-                ], limit=1)
-                if odoo_account:
-                    id_mapping[code_str] = odoo_account.id
-                    _logger.info(f"Mapped glAccountId {code_str} to Odoo account {odoo_account.id}")
+                env.cr.execute("""
+                    SELECT id FROM account_account 
+                    WHERE code = %s
+                    LIMIT 1
+                """, (code_str,))
+                result = env.cr.fetchone()
+                
+                if result:
+                    odoo_account_id = result[0]
+                    id_mapping[code_str] = odoo_account_id
+                    _logger.info(f"Mapped glAccountId {code_str} to Odoo account {odoo_account_id}")
                 else:
                     _logger.warning(f"Account code {code_str} found in custom_account_entry, but no Odoo account found")
             except Exception as e:
