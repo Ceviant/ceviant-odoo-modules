@@ -55,10 +55,20 @@ def get_env():
 
 def get_company_id(env):
     """Retrieve the company_id for the current context in Odoo."""
-    # Use env.company to get the company from the current context
-    # This works both in HTTP context and when running from RabbitMQ consumer threads
-    company_id = env.company.id
-    return company_id
+    # Explicitly search for the first company instead of using env.company
+    # to avoid context resolution issues with res.users in RabbitMQ threads
+    try:
+        first_company = env['res.company'].sudo().search([], limit=1)
+        if first_company:
+            company_id = first_company.id
+            _logger.debug(f"Found company ID: {company_id}")
+            return company_id
+        else:
+            _logger.error("No company found in the system")
+            raise RuntimeError("No company found in the system")
+    except Exception as e:
+        _logger.error(f"Failed to get company ID: {e}")
+        raise RuntimeError(f"Cannot retrieve company ID: {str(e)}")
 
 
 def create_or_get_ledger_sync_journal(env, company_id):
