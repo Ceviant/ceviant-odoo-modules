@@ -109,8 +109,11 @@ class BatchProcessor(models.Model):
                 params = pika.ConnectionParameters(
                     host=host, port=port, virtual_host=virtual_host,
                     credentials=pika.PlainCredentials(username, password),
-                    connection_attempts=5, retry_delay=2,
-                    socket_options=[(1, 9, 1)]  # TCP_NODELAY for lower latency
+                    connection_attempts=3,  # Reduced from 5
+                    retry_delay=1,  # Reduced from 2
+                    socket_options=[(1, 9, 1)],  # TCP_NODELAY for lower latency
+                    connection_timeout=5,  # Add explicit timeout
+                    heartbeat=30  # Keep connection alive
                 )
                 cls._connection = pika.BlockingConnection(params)
                 _logger.info(f"✓ Connected to RabbitMQ successfully")
@@ -238,6 +241,10 @@ class BatchProcessor(models.Model):
         _logger.info(f"\n{consumer_id} - Starting fetch_and_process_messages")
         _logger.info(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
         
+        initial_backoff = 1  # Start with 1 second backoff
+        max_backoff = 60  # Max 60 seconds
+        current_backoff = initial_backoff
+        
         while True:  # Keep running indefinitely
             try:
                 _logger.info(f"{consumer_id} - Initializing consumer...")
@@ -272,6 +279,9 @@ class BatchProcessor(models.Model):
                 _logger.info(f"{'='*80}")
                 _logger.info(f"✓ {consumer_id} is now READY and listening for messages\n")
                 
+                # Reset backoff on successful connection
+                current_backoff = initial_backoff
+                
                 # This blocks until connection drops
                 try:
                     channel.start_consuming()
@@ -283,34 +293,38 @@ class BatchProcessor(models.Model):
                     raise
                 
             except pika.exceptions.ConnectionClosedByBroker:
-                _logger.warning(f"{consumer_id} - Connection closed by broker, reconnecting in 5s...")
+                _logger.warning(f"{consumer_id} - Connection closed by broker, reconnecting in {current_backoff}s...")
                 _logger.warning(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
-                time.sleep(5)
+                time.sleep(current_backoff)
                 self._channel = None
                 self._connection = None
+                current_backoff = min(current_backoff * 2, max_backoff)
                 
             except pika.exceptions.AMQPChannelError as e:
-                _logger.error(f"{consumer_id} - AMQP Channel Error: {e}, reconnecting in 5s...")
+                _logger.error(f"{consumer_id} - AMQP Channel Error: {e}, reconnecting in {current_backoff}s...")
                 _logger.error(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
-                time.sleep(5)
+                time.sleep(current_backoff)
                 self._channel = None
                 self._connection = None
+                current_backoff = min(current_backoff * 2, max_backoff)
                 
             except pika.exceptions.AMQPConnectionError as e:
-                _logger.error(f"{consumer_id} - AMQP Connection Error: {e}, reconnecting in 5s...")
+                _logger.error(f"{consumer_id} - AMQP Connection Error: {e}, reconnecting in {current_backoff}s...")
                 _logger.error(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
-                time.sleep(5)
+                time.sleep(current_backoff)
                 self._channel = None
                 self._connection = None
+                current_backoff = min(current_backoff * 2, max_backoff)
                 
             except Exception as e:
                 _logger.critical(f"\n{consumer_id} - FATAL ERROR: {type(e).__name__} - {str(e)}")
                 _logger.critical(f"Traceback: ", exc_info=True)
                 _logger.critical(f"{consumer_id} - Active Consumers: {active_count}/{NUM_CONSUMERS}")
-                _logger.critical(f"Reconnecting in 10s...")
-                time.sleep(10)
+                _logger.critical(f"Reconnecting in {current_backoff}s...")
+                time.sleep(current_backoff)
                 self._channel = None
                 self._connection = None
+                current_backoff = min(current_backoff * 2, max_backoff)
 
     @staticmethod
     def _infer_queue_type(body):
@@ -347,12 +361,12 @@ class BatchProcessor(models.Model):
             _logger.info(f"Max Retries: {MAX_RETRIES}")
             _logger.info(f"{'='*80}\n")
             
-            # Start multiple consumers in NON-DAEMON threads (so they persist)
+            # Start multiple consumers in DAEMON threads (so they don't block Odoo shutdown)
             consumer_threads = []
             for i in range(NUM_CONSUMERS):
                 consumer_thread = Thread(
                     target=self.fetch_and_process_messages,
-                    daemon=False,  # IMPORTANT: Non-daemon threads persist after main thread exits
+                    daemon=True,  # IMPORTANT: Daemon threads exit when main process exits
                     name=f"RabbitMQConsumer-{i+1}"
                 )
                 consumer_thread.start()
