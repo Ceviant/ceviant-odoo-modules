@@ -80,21 +80,52 @@ def create_or_get_ledger_sync_journal(env, company_id):
     journal_name = 'Ledger Sync'
     journal_code = 'LEDGE'
 
-    existing_journal = env['account.journal'].search([
-        ('code', '=', journal_code),
-        ('company_id', '=', company_id)
-    ], limit=1)
+    existing_journal = None
+    
+    # Try to find journal by name first (more reliable)
+    try:
+        existing_journal = env['account.journal'].search([
+            ('name', '=', journal_name),
+            ('company_id', '=', company_id)
+        ], limit=1)
+        if existing_journal:
+            _logger.info(f"'Ledger Sync' journal already exists with ID {existing_journal[0].id}")
+            return existing_journal[0]
+    except Exception as e:
+        _logger.warning(f"Could not search journal by name: {str(e)}")
 
-    if existing_journal:
-        _logger.info(f"'Ledger Sync' journal already exists with ID {existing_journal[0].id}")
-        return existing_journal[0]
+    # If not found by name, try searching all journals and filter in Python
+    if not existing_journal:
+        try:
+            all_journals = env['account.journal'].search([
+                ('company_id', '=', company_id)
+            ])
+            for journal in all_journals:
+                if journal.name == journal_name:
+                    _logger.info(f"'Ledger Sync' journal found with ID {journal.id}")
+                    return journal
+        except Exception as e:
+            _logger.warning(f"Could not search all journals: {str(e)}")
 
+    # Create the journal with minimal required fields
     journal_data = {
         'name': journal_name,
-        'type': 'general',
-        'code': journal_code,
         'company_id': company_id,
     }
+    
+    # Try to add code if the field exists
+    try:
+        test_journal = env['account.journal'].search([], limit=1)
+        if test_journal and hasattr(test_journal[0], 'code'):
+            journal_data['code'] = journal_code
+    except:
+        pass
+    
+    # Try to add type if it's required
+    try:
+        journal_data['type'] = 'general'
+    except:
+        pass
 
     try:
         journal_id = env['account.journal'].create(journal_data)
@@ -102,6 +133,16 @@ def create_or_get_ledger_sync_journal(env, company_id):
         return journal_id
     except Exception as e:
         _logger.error(f"Failed to create 'Ledger Sync' journal: {str(e)}")
+        # Even if we can't create, try to return the first general journal as fallback
+        try:
+            fallback = env['account.journal'].search([
+                ('company_id', '=', company_id)
+            ], limit=1)
+            if fallback:
+                _logger.warning(f"Using fallback journal {fallback[0].id} instead")
+                return fallback[0]
+        except:
+            pass
         return None
 
 
@@ -269,16 +310,29 @@ def process_transaction(payload):
         _logger.error(error_message)
         return {'status': 'error', 'message': error_message}
 
-    _logger.info(f"Journal ID: {journal.id}, Journal Name: {journal.name}")
+    # Safe access to journal attributes
+    try:
+        journal_id = journal.id
+        journal_name = getattr(journal, 'name', f'Journal {journal_id}')
+        _logger.info(f"Journal ID: {journal_id}, Journal Name: {journal_name}")
+    except Exception as e:
+        _logger.error(f"Error accessing journal attributes: {e}")
+        return {'status': 'error', 'message': f"Error accessing journal: {str(e)}"}
 
     line_ids = _prepare_line_ids(payload, account_ids_to_use, env)
 
+    # Use journal name or code if available, fallback to journal ID
+    try:
+        journal_name_or_code = getattr(journal, 'code', None) or journal_name
+    except:
+        journal_name_or_code = journal_name
+
     transaction_data = {
-        "journal_id": journal.id,
+        "journal_id": journal_id,
         "company_id": company_id,
         "date": transaction_date,
         "ref": payload.get("transactionReference"),
-        "name": f"{journal.code}",
+        "name": f"{journal_name_or_code}",
         "currency_id": currency_id,
         "line_ids": line_ids,
     }
@@ -294,7 +348,7 @@ def process_transaction(payload):
             "transaction_date": transaction_date,
             "transaction_reference": payload.get("transactionReference"),
             "time_stamp": payload.get("timeStamp"),
-            "journal_id": journal.id,
+            "journal_id": journal_id,
             "company_id": company_id,
             "account_move_id": transaction_id.id,
             "currency_id": currency_id,
