@@ -410,11 +410,11 @@ def process_transaction(payload):
             env.cr.execute("""
                 INSERT INTO account_move_line 
                 (move_id, account_id, name, debit, credit, currency_id, 
-                 company_id, create_uid, write_uid, create_date, write_date)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 company_id, display_type, create_uid, write_uid, create_date, write_date)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (transaction_id_value, line_data['account_id'], line_data['name'], 
                   line_data['debit'], line_data['credit'], currency_id, 
-                  company_id, 1, 1, now, now))
+                  company_id, 'product', 1, 1, now, now))
         
         env.cr.commit()
         _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
