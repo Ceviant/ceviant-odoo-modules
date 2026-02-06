@@ -421,7 +421,6 @@ def process_transaction(payload):
 
         # Create custom journal entry using ORM
         custom_journal_entry = env["custom.journal.entry"].create({
-            "branch_id": payload.get("branchId"),
             "transaction_date": transaction_date,
             "transaction_reference": payload.get("transactionReference"),
             "time_stamp": payload.get("timeStamp"),
@@ -518,7 +517,6 @@ def update_journal_entry_in_database(payload):
 
         currency_id = get_currency_id(env, payload.get("currencyCode"))
         custom_update_data = {
-            "branch_id": payload.get("branchId"),
             "transaction_date": transaction_date,
             "time_stamp": payload.get("timeStamp"),
             "currency_id": currency_id,
