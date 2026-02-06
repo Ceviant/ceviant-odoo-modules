@@ -387,11 +387,11 @@ def process_transaction(payload):
         env.cr.execute("""
             INSERT INTO account_move 
             (journal_id, company_id, date, ref, name, currency_id, 
-             state, move_type, active, create_uid, write_uid, create_date, write_date)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             state, move_type, create_uid, write_uid, create_date, write_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (journal_id, company_id, transaction_date, payload.get("transactionReference"), 
-              move_name, currency_id, 'draft', 'entry', True, 1, 1, now, now))
+              move_name, currency_id, 'draft', 'entry', 1, 1, now, now))
         
         result = env.cr.fetchone()
         if not result:
