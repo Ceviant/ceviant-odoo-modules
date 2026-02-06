@@ -73,6 +73,11 @@ class BatchProcessor(models.Model):
         username = os.getenv("RABBITMQ_USERNAME")
         password = os.getenv("RABBITMQ_PASSWORD")
 
+        # Validate required environment variables
+        if not all([host, port, virtual_host, username, password]):
+            logging.error("Missing required RabbitMQ environment variables")
+            return
+
         connection = None
         channel = None
         try:
