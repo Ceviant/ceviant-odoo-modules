@@ -16,7 +16,7 @@ class JournalEntryController(http.Controller):
         # Ensure consumer is running
         if not BatchProcessor._consumer_active:
             _logger.info("Starting batch processor consumer...")
-            BatchProcessor.run_batch_processor()
+            request.env['custom_journal_entry.batch_processor'].run_batch_processor()
         
         raw_data = request.httprequest.data.decode('utf-8')
         try:
@@ -87,7 +87,7 @@ class JournalEntryController(http.Controller):
         # Ensure consumer is running
         if not BatchProcessor._consumer_active:
             _logger.info("Starting batch processor consumer...")
-            BatchProcessor.run_batch_processor()
+            request.env['custom_journal_entry.batch_processor'].run_batch_processor()
         
         raw_data = request.httprequest.data.decode('utf-8')
         try:
