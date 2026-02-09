@@ -169,7 +169,7 @@ def _create_custom_entry_lines(env, custom_journal_entry, payload):
             _logger.error(f"Error creating custom debit line for account_id: {account_id}. Error: {e}")
 
 
-def _create_custom_journal_entry(env, account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference):
+def _create_custom_journal_entry(env, account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference, transaction_date):
     """Create a custom journal entry record using raw SQL.
     
     Returns:
@@ -179,10 +179,10 @@ def _create_custom_journal_entry(env, account_move_id, journal_id, company_id, c
         now = datetime.now()
         env.cr.execute("""
             INSERT INTO custom_journal_entry 
-            (account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference, create_uid, write_uid, create_date, write_date)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference, transaction_date, create_uid, write_uid, create_date, write_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference, 1, 1, now, now))
+        """, (account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference, transaction_date, 1, 1, now, now))
         
         result = env.cr.fetchone()
         if result:
@@ -360,7 +360,11 @@ def _check_existing_transaction(env, transaction_reference, journal_id, company_
                 _logger.warning(f"Transaction '{transaction_reference}' exists in account_move but not in custom_journal_entry. Creating missing custom entry.")
                 # Create the missing custom_journal_entry
                 account_move_id = existing_result[0]
-                custom_entry_id = _create_custom_journal_entry(env, account_move_id, journal_id, company_id, currency_id, payload.get("branchId"), transaction_reference)
+                # Get transaction_date from the existing account_move
+                env.cr.execute("SELECT date FROM account_move WHERE id = %s", (account_move_id,))
+                date_result = env.cr.fetchone()
+                transaction_date = date_result[0] if date_result else None
+                custom_entry_id = _create_custom_journal_entry(env, account_move_id, journal_id, company_id, currency_id, payload.get("branchId"), transaction_reference, transaction_date)
                 if custom_entry_id:
                     _logger.info(f"Created missing custom journal entry: {custom_entry_id}")
                 else:
@@ -443,7 +447,7 @@ def _create_transaction_records(env, journal_id, company_id, transaction_date, t
         _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
 
         # Create custom journal entry using the helper function
-        custom_entry_id = _create_custom_journal_entry(env, transaction_id_value, journal_id, company_id, currency_id, payload.get("branchId"), transaction_reference)
+        custom_entry_id = _create_custom_journal_entry(env, transaction_id_value, journal_id, company_id, currency_id, payload.get("branchId"), transaction_reference, transaction_date)
         if not custom_entry_id:
             _logger.warning("Failed to create custom journal entry. Continuing with account move only.")
 
