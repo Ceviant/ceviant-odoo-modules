@@ -344,10 +344,8 @@ def process_transaction(payload):
         """, (transaction_reference, transaction_reference))
         existing_result = env.cr.fetchone()
         if existing_result:
-            error_message = f"Transaction with reference '{transaction_reference}' already exists."
-            _logger.error(error_message)
-            env.cr.rollback()
-            return {'status': 'error', 'message': error_message}
+            _logger.info(f"Transaction with reference '{transaction_reference}' already exists. Returning success.")
+            return {'status': 'success', 'message': 'Journal entry created successfully'}
     except Exception as e:
         _logger.warning(f"Could not check for existing transaction: {str(e)}")
         env.cr.rollback()
