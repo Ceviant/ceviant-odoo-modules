@@ -17,6 +17,12 @@ class BatchProcessor(models.Model):
     _consumer_active = False
     _consumer_thread = None
 
+    @api.model
+    def init(self):
+        """Initialize the batch processor and start the consumer."""
+        super(BatchProcessor, self).init()
+        self.run_batch_processor()
+
     def process_message(self, ch, method, properties, body, retry_count=0):
         """Process a single message from RabbitMQ and route it to the appropriate handler."""
         batch_ref = None
