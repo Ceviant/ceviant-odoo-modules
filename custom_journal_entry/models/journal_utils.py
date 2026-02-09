@@ -169,6 +169,36 @@ def _create_custom_entry_lines(env, custom_journal_entry, payload):
             _logger.error(f"Error creating custom debit line for account_id: {account_id}. Error: {e}")
 
 
+def _create_custom_journal_entry(env, account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference):
+    """Create a custom journal entry record using raw SQL.
+    
+    Returns:
+        int or None: The ID of the created custom journal entry, or None if creation failed.
+    """
+    try:
+        now = datetime.now()
+        env.cr.execute("""
+            INSERT INTO custom_journal_entry 
+            (account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference, create_uid, write_uid, create_date, write_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (account_move_id, journal_id, company_id, currency_id, branch_id, transaction_reference, 1, 1, now, now))
+        
+        result = env.cr.fetchone()
+        if result:
+            custom_entry_id = result[0]
+            env.cr.commit()
+            _logger.info(f"Custom journal entry created: {custom_entry_id}")
+            return custom_entry_id
+        else:
+            _logger.warning("Failed to create custom journal entry - no ID returned")
+            return None
+    except Exception as e:
+        _logger.warning(f"Could not create custom journal entry: {e}")
+        env.cr.rollback()
+        return None
+
+
 def _create_account_move_lines(env, existing_entry, payload, id_mapping=None):
     """Create account move lines for both credits and debits.
     
@@ -208,6 +238,221 @@ def _create_account_move_lines(env, existing_entry, payload, id_mapping=None):
             })
         except Exception as e:
             _logger.error(f"Error creating debit line for account_id: {account_id}. Error: {e}")
+
+
+def _get_common_data(payload):
+    """Extract and validate common data needed for transaction processing."""
+    try:
+        env = get_env()
+    except Exception as e:
+        _logger.error(f"Failed to get environment: {e}")
+        return None, {'status': 'error', 'message': f"Failed to get environment: {str(e)}"}
+    
+    is_valid, validation_error = validate_journal_entry(payload)
+    if not is_valid:
+        _logger.error(f"Payload validation failed: {validation_error}")
+        return None, {'status': 'error', 'message': validation_error}
+
+    currency_code = payload.get("currencyCode")
+    currency_id = get_currency_id(env, currency_code)
+    if not currency_id:
+        _logger.error(f"Failed to get currency {currency_code} or default.")
+        return None, {'status': 'error', 'message': f"Failed to get currency {currency_code}"}
+
+    credits = [int(credit.get("glAccountId")) for credit in payload.get("credits", []) if credit.get("glAccountId") is not None]
+    debits = [int(debit.get("glAccountId")) for debit in payload.get("debits", []) if debit.get("glAccountId") is not None]
+
+    if not credits or not debits:
+        _logger.error("Payload missing required fields 'credits' or 'debits'")
+        return None, {'status': 'error', 'message': "Missing required fields 'credits' or 'debits'"}
+
+    all_account_ids = set(credits + debits)
+    _logger.info(f"All account IDs {all_account_ids}")
+
+    try:
+        id_mapping = validate_account_ids(env, all_account_ids)
+    except Exception as e:
+        _logger.error(f"Error validating account IDs: {str(e)}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
+        return None, {'status': 'error', 'message': f"Error validating accounts: {str(e)}"}
+    
+    _logger.info(f"Account ID mapping: {id_mapping}")
+    
+    # Check if all accounts could be mapped
+    unmapped_ids = all_account_ids - set(id_mapping.keys())
+    if unmapped_ids:
+        error_message = f"Account validation failed. These account IDs could not be found: {unmapped_ids}"
+        _logger.error(error_message)
+        return None, {'status': 'error', 'message': error_message}
+    
+    _logger.info(f"All accounts validated and mapped successfully")
+
+    transaction_date_str = payload.get("transactionDate")
+    try:
+        transaction_date_obj = datetime.strptime(transaction_date_str, "%d/%m/%Y")
+        transaction_date = transaction_date_obj.strftime("%Y-%m-%d")
+    except (ValueError, TypeError) as e:
+        _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
+        return None, {'status': 'error', 'message': "Invalid transaction date format"}
+
+    company_id = get_company_id(env)
+    _logger.info(f"Processing transaction {payload.get('transactionReference')}")
+
+    # Get account name from the first account for journal naming
+    account_name = None
+    try:
+        first_account_id = next(iter(all_account_ids))
+        env.cr.execute("""
+            SELECT account_name FROM custom_account_entry 
+            WHERE account_code = %s
+            LIMIT 1
+        """, (str(first_account_id),))
+        result = env.cr.fetchone()
+        if result:
+            account_name = result[0]
+            _logger.debug(f"Retrieved account name '{account_name}' for journal creation")
+    except Exception as e:
+        _logger.warning(f"Could not retrieve account name for journal: {str(e)}")
+    
+    try:
+        journal = create_or_get_ledger_sync_journal(env, company_id, account_name)
+    except Exception as e:
+        _logger.error(f"Failed to get journal: {str(e)}")
+        return None, {'status': 'error', 'message': f"Failed to get journal: {str(e)}"}
+    
+    if not journal:
+        return None, {'status': 'error', 'message': "No journal available"}
+
+    return {
+        'env': env,
+        'company_id': company_id,
+        'currency_id': currency_id,
+        'id_mapping': id_mapping,
+        'transaction_date_obj': transaction_date_obj,
+        'transaction_date': transaction_date,
+        'journal': journal,
+        'all_account_ids': all_account_ids
+    }, None
+
+
+def _check_existing_transaction(env, transaction_reference, journal_id, company_id, currency_id, payload):
+    """Check if transaction already exists and handle custom_journal_entry consistency."""
+    try:
+        env.cr.execute("""
+            SELECT id FROM account_move 
+            WHERE name = %s OR ref = %s
+            LIMIT 1
+        """, (transaction_reference, transaction_reference))
+        existing_result = env.cr.fetchone()
+        if existing_result:
+            # Also check if custom_journal_entry exists
+            env.cr.execute("""
+                SELECT id FROM custom_journal_entry 
+                WHERE transaction_reference = %s
+                LIMIT 1
+            """, (transaction_reference,))
+            custom_result = env.cr.fetchone()
+            if custom_result:
+                _logger.info(f"Transaction with reference '{transaction_reference}' already exists in both tables. Returning success.")
+                return {'status': 'success', 'message': 'Journal entry created successfully'}
+            else:
+                _logger.warning(f"Transaction '{transaction_reference}' exists in account_move but not in custom_journal_entry. Creating missing custom entry.")
+                # Create the missing custom_journal_entry
+                account_move_id = existing_result[0]
+                custom_entry_id = _create_custom_journal_entry(env, account_move_id, journal_id, company_id, currency_id, payload.get("branchId"), transaction_reference)
+                if custom_entry_id:
+                    _logger.info(f"Created missing custom journal entry: {custom_entry_id}")
+                else:
+                    _logger.warning("Failed to create missing custom journal entry")
+                return {'status': 'success', 'message': 'Journal entry created successfully'}
+    except Exception as e:
+        _logger.warning(f"Could not check for existing transaction: {str(e)}")
+        env.cr.rollback()
+    return None
+
+
+def _generate_move_name(env, journal_id, transaction_date_obj):
+    """Generate a unique move name for the transaction."""
+    try:
+        # Get journal code from database using raw SQL
+        env.cr.execute("SELECT code FROM account_journal WHERE id = %s", (journal_id,))
+        result = env.cr.fetchone()
+        journal_code = result[0] if result else 'JNL'
+        
+        # Generate move name in format: JOURNAL_CODE/YEAR/MONTH/SEQUENCE
+        year = transaction_date_obj.year
+        month = str(transaction_date_obj.month).zfill(2)
+        
+        # Get the next sequence number for this journal/year/month
+        env.cr.execute("""
+            SELECT COUNT(*) FROM account_move 
+            WHERE journal_id = %s 
+            AND DATE_PART('year', date) = %s 
+            AND DATE_PART('month', date) = %s
+        """, (journal_id, year, transaction_date_obj.month))
+        
+        sequence_num = (env.cr.fetchone()[0] + 1)
+        move_name = f"{journal_code}/{year}/{month}/{str(sequence_num).zfill(4)}"
+        
+        _logger.debug(f"Generated move name: {move_name}")
+        return move_name
+    except Exception as e:
+        _logger.error(f"Error generating move name: {e}")
+        raise
+
+
+def _create_transaction_records(env, journal_id, company_id, transaction_date, transaction_reference, move_name, currency_id, line_ids, payload):
+    """Create account_move, move_lines, and custom_journal_entry."""
+    try:
+        # Create account move using raw SQL to avoid ORM field sync issues
+        now = datetime.now()
+        env.cr.execute("""
+            INSERT INTO account_move 
+            (journal_id, company_id, date, ref, name, currency_id, 
+             state, move_type, auto_post, create_uid, write_uid, create_date, write_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (journal_id, company_id, transaction_date, transaction_reference, 
+              move_name, currency_id, 'draft', 'entry', 'no', 1, 1, now, now))
+        
+        result = env.cr.fetchone()
+        if not result:
+            raise Exception("Failed to create account move - no ID returned")
+        
+        transaction_id_value = result[0]
+        env.cr.commit()
+        
+        # Fetch the created move using browse to work with ORM
+        transaction_id = env["account.move"].sudo().browse(transaction_id_value)
+        _logger.info(f"Transaction {transaction_id.id} created in Odoo via SQL")
+
+        # Create move lines using raw SQL
+        for line in line_ids:
+            line_data = line[2]
+            env.cr.execute("""
+                INSERT INTO account_move_line 
+                (move_id, account_id, name, debit, credit, currency_id, 
+                 company_id, display_type, create_uid, write_uid, create_date, write_date)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (transaction_id_value, line_data['account_id'], line_data['name'], 
+                  line_data['debit'], line_data['credit'], currency_id, 
+                  company_id, 'product', 1, 1, now, now))
+        
+        env.cr.commit()
+        _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
+
+        # Create custom journal entry using the helper function
+        custom_entry_id = _create_custom_journal_entry(env, transaction_id_value, journal_id, company_id, currency_id, payload.get("branchId"), transaction_reference)
+        if not custom_entry_id:
+            _logger.warning("Failed to create custom journal entry. Continuing with account move only.")
+
+        return {'status': 'success', 'message': 'Journal entry created successfully'}
+    except Exception as e:
+        _logger.error(f"Error creating journal entry: {e}")
+        import traceback
+        _logger.error(f"Traceback: {traceback.format_exc()}")
+        return {'status': 'error', 'message': f"Error creating journal entry: {str(e)}"}
 
 
 def _prepare_line_ids(payload, account_id_mapping, env):
@@ -250,202 +495,35 @@ def process_transaction(payload):
     Returns:
         dict: {'status': 'success'/'error', 'message': 'Description'}
     """
-    try:
-        env = get_env()
-    except Exception as e:
-        _logger.error(f"Failed to get environment: {e}")
-        return {'status': 'error', 'message': f"Failed to get environment: {str(e)}"}
+    common_data, error = _get_common_data(payload)
+    if error:
+        return error
     
-    is_valid, validation_error = validate_journal_entry(payload)
-
-    if not is_valid:
-        _logger.error(f"Payload validation failed: {validation_error}")
-        return {'status': 'error', 'message': validation_error}
-
-    currency_code = payload.get("currencyCode")
-    currency_id = get_currency_id(env, currency_code)
-    if not currency_id:
-        _logger.error(f"Failed to get currency {currency_code} or default.")
-        return {'status': 'error', 'message': f"Failed to get currency {currency_code}"}
-
-    credits = [int(credit.get("glAccountId")) for credit in payload.get("credits", []) if credit.get("glAccountId") is not None]
-    debits = [int(debit.get("glAccountId")) for debit in payload.get("debits", []) if debit.get("glAccountId") is not None]
-
-    if not credits or not debits:
-        _logger.error("Payload missing required fields 'credits' or 'debits'")
-        return {'status': 'error', 'message': "Missing required fields 'credits' or 'debits'"}
-
-    all_account_ids = set(credits + debits)
-    _logger.info(f"All account IDs {all_account_ids}")
-
-    try:
-        id_mapping = validate_account_ids(env, all_account_ids)
-    except Exception as e:
-        _logger.error(f"Error validating account IDs: {str(e)}")
-        import traceback
-        _logger.error(f"Traceback: {traceback.format_exc()}")
-        return {'status': 'error', 'message': f"Error validating accounts: {str(e)}"}
+    env = common_data['env']
+    company_id = common_data['company_id']
+    currency_id = common_data['currency_id']
+    id_mapping = common_data['id_mapping']
+    transaction_date_obj = common_data['transaction_date_obj']
+    transaction_date = common_data['transaction_date']
+    journal = common_data['journal']
+    all_account_ids = common_data['all_account_ids']
     
-    _logger.info(f"Account ID mapping: {id_mapping}")
-    
-    # Check if all accounts could be mapped
-    unmapped_ids = all_account_ids - set(id_mapping.keys())
-    if unmapped_ids:
-        error_message = f"Account validation failed. These account IDs could not be found: {unmapped_ids}"
-        _logger.error(error_message)
-        return {'status': 'error', 'message': error_message}
-    
-    _logger.info(f"All accounts validated and mapped successfully")
-
-    transaction_date_str = payload.get("transactionDate")
-    try:
-        transaction_date_obj = datetime.strptime(transaction_date_str, "%d/%m/%Y")
-        transaction_date = transaction_date_obj.strftime("%Y-%m-%d")
-    except (ValueError, TypeError) as e:
-        _logger.error(f"Invalid date format in transactionDate: {transaction_date_str}. Error: {e}")
-        return {'status': 'error', 'message': "Invalid transaction date format"}
-
-    company_id = get_company_id(env)
-    _logger.info(f"Processing transaction {payload.get('transactionReference')}")
-
-    # Get account name from the first account for journal naming
-    account_name = None
-    try:
-        first_account_id = next(iter(all_account_ids))
-        env.cr.execute("""
-            SELECT account_name FROM custom_account_entry 
-            WHERE account_code = %s
-            LIMIT 1
-        """, (str(first_account_id),))
-        result = env.cr.fetchone()
-        if result:
-            account_name = result[0]
-            _logger.debug(f"Retrieved account name '{account_name}' for journal creation")
-    except Exception as e:
-        _logger.warning(f"Could not retrieve account name for journal: {str(e)}")
-    
-    try:
-        journal = create_or_get_ledger_sync_journal(env, company_id, account_name)
-    except Exception as e:
-        _logger.error(f"Failed to get journal: {str(e)}")
-        return {'status': 'error', 'message': f"Failed to get journal: {str(e)}"}
-    
-    if not journal:
-        return {'status': 'error', 'message': "No journal available"}
-
     transaction_reference = payload.get("transactionReference")
     
-    # Check if transaction already exists using raw SQL
-    try:
-        env.cr.execute("""
-            SELECT id FROM account_move 
-            WHERE name = %s OR ref = %s
-            LIMIT 1
-        """, (transaction_reference, transaction_reference))
-        existing_result = env.cr.fetchone()
-        if existing_result:
-            _logger.info(f"Transaction with reference '{transaction_reference}' already exists. Returning success.")
-            return {'status': 'success', 'message': 'Journal entry created successfully'}
-    except Exception as e:
-        _logger.warning(f"Could not check for existing transaction: {str(e)}")
-        env.cr.rollback()
+    # Check if transaction already exists
+    existing_check = _check_existing_transaction(env, transaction_reference, journal.id, company_id, currency_id, payload)
+    if existing_check:
+        return existing_check
 
-    # Use journal ID and account name for transaction naming
+    # Generate move name
     try:
-        journal_id = journal.id
-        
-        # Get journal code from database using raw SQL
-        env.cr.execute("SELECT code FROM account_journal WHERE id = %s", (journal_id,))
-        result = env.cr.fetchone()
-        journal_code = result[0] if result else 'JNL'
-        
-        # Generate move name in format: JOURNAL_CODE/YEAR/MONTH/SEQUENCE
-        year = transaction_date_obj.year
-        month = str(transaction_date_obj.month).zfill(2)
-        
-        # Get the next sequence number for this journal/year/month
-        env.cr.execute("""
-            SELECT COUNT(*) FROM account_move 
-            WHERE journal_id = %s 
-            AND DATE_PART('year', date) = %s 
-            AND DATE_PART('month', date) = %s
-        """, (journal_id, year, transaction_date_obj.month))
-        
-        sequence_num = (env.cr.fetchone()[0] + 1)
-        move_name = f"{journal_code}/{year}/{month}/{str(sequence_num).zfill(4)}"
-        
-        _logger.debug(f"Generated move name: {move_name}")
+        move_name = _generate_move_name(env, journal.id, transaction_date_obj)
     except Exception as e:
-        _logger.error(f"Error generating move name: {e}")
         return {'status': 'error', 'message': f"Error generating move name: {str(e)}"}
 
     line_ids = _prepare_line_ids(payload, id_mapping, env)
 
-    try:
-        # Create account move using raw SQL to avoid ORM field sync issues
-        now = datetime.now()
-        env.cr.execute("""
-            INSERT INTO account_move 
-            (journal_id, company_id, date, ref, name, currency_id, 
-             state, move_type, auto_post, create_uid, write_uid, create_date, write_date)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (journal_id, company_id, transaction_date, payload.get("transactionReference"), 
-              move_name, currency_id, 'draft', 'entry', 'no', 1, 1, now, now))
-        
-        result = env.cr.fetchone()
-        if not result:
-            raise Exception("Failed to create account move - no ID returned")
-        
-        transaction_id_value = result[0]
-        env.cr.commit()
-        
-        # Fetch the created move using browse to work with ORM
-        transaction_id = env["account.move"].sudo().browse(transaction_id_value)
-        _logger.info(f"Transaction {transaction_id.id} created in Odoo via SQL")
-
-        # Create move lines using raw SQL
-        for line in line_ids:
-            line_data = line[2]
-            env.cr.execute("""
-                INSERT INTO account_move_line 
-                (move_id, account_id, name, debit, credit, currency_id, 
-                 company_id, display_type, create_uid, write_uid, create_date, write_date)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (transaction_id_value, line_data['account_id'], line_data['name'], 
-                  line_data['debit'], line_data['credit'], currency_id, 
-                  company_id, 'product', 1, 1, now, now))
-        
-        env.cr.commit()
-        _logger.info(f"Created {len(line_ids)} move lines for transaction {transaction_id.id}")
-
-        # Create custom journal entry using raw SQL for better compatibility
-        try:
-            now = datetime.now()
-            env.cr.execute("""
-                INSERT INTO custom_journal_entry 
-                (account_move_id, journal_id, company_id, currency_id, branch_id, create_uid, write_uid, create_date, write_date)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (transaction_id_value, journal_id, company_id, currency_id, payload.get("branchId"), 1, 1, now, now))
-            
-            result = env.cr.fetchone()
-            if result:
-                custom_entry_id = result[0]
-                env.cr.commit()
-                _logger.info(f"Custom journal entry created: {custom_entry_id}")
-            else:
-                _logger.warning("Failed to create custom journal entry - no ID returned")
-        except Exception as e:
-            _logger.warning(f"Could not create custom journal entry: {e}. Continuing with account move only.")
-
-    except Exception as e:
-        _logger.error(f"Error creating journal entry: {e}")
-        import traceback
-        _logger.error(f"Traceback: {traceback.format_exc()}")
-        return {'status': 'error', 'message': f"Error creating journal entry: {str(e)}"}
-
-    return {'status': 'success', 'message': 'Journal entry created successfully'}
+    return _create_transaction_records(env, journal.id, company_id, transaction_date, transaction_reference, move_name, currency_id, line_ids, payload)
 
 
 def update_journal_entry_in_database(payload):
