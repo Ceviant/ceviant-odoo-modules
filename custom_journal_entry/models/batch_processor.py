@@ -5,6 +5,7 @@ import logging
 from odoo import models, api
 from .journal_utils import process_transaction
 import time
+from threading import Thread
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -13,6 +14,8 @@ RETRY_DELAY = 5
 
 class BatchProcessor(models.Model):
     _name = 'custom_journal_entry.batch_processor'
+    _consumer_active = False
+    _consumer_thread = None
 
     def process_message(self, ch, method, properties, body, retry_count=0):
         """Process a single message from RabbitMQ and route it to the appropriate handler."""
@@ -98,9 +101,19 @@ class BatchProcessor(models.Model):
                 channel.basic_qos(prefetch_count=1)
                 
                 # Set up continuous consumer
+                def callback(ch, method, properties, body):
+                    try:
+                        self.process_message(ch, method, properties, body)
+                    except Exception as e:
+                        logging.error(f"Error in message callback: {str(e)}", exc_info=True)
+                        try:
+                            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                        except Exception as nack_error:
+                            logging.error(f"Failed to nack message: {nack_error}")
+                
                 channel.basic_consume(
                     queue='odoo_transaction_queue',
-                    on_message_callback=self.process_message,
+                    on_message_callback=callback,
                     auto_ack=False
                 )
                 
@@ -128,5 +141,12 @@ class BatchProcessor(models.Model):
 
     @api.model
     def run_batch_processor(self):
-        """Run the batch processor as a cron job."""
-        self.fetch_and_process_messages()
+        """Run the batch processor as a background service."""
+        if self._consumer_active:
+            logging.warning("Consumer is already active, skipping startup")
+            return
+        
+        self._consumer_active = True
+        self._consumer_thread = Thread(target=self.fetch_and_process_messages, daemon=True)
+        self._consumer_thread.start()
+        logging.info("Batch processor started in background thread")
