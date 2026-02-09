@@ -21,6 +21,7 @@ class BatchProcessor(models.Model):
     def init(self):
         """Initialize the batch processor and start the consumer."""
         super(BatchProcessor, self).init()
+        logging.info("BatchProcessor init called, starting consumer...")
         self.run_batch_processor()
 
     def process_message(self, ch, method, properties, body, retry_count=0):

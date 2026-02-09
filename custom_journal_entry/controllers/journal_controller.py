@@ -3,6 +3,7 @@ from odoo import http
 from odoo.http import request, Response
 from ..models.validation import validate_journal_entry
 from ..models.rabbitmq_publisher import publish_journal_entry_to_rabbitmq, publish_journal_entry_update_to_rabbitmq
+from ..models.batch_processor import BatchProcessor
 import logging
 import json
 
@@ -12,6 +13,11 @@ class JournalEntryController(http.Controller):
     @http.route('/ledger/transactions', type='http', auth='public', methods=['POST'], csrf=False)
     def handle_transaction(self):
         _logger.info("Entering handle_transaction method")
+        # Ensure consumer is running
+        if not BatchProcessor._consumer_active:
+            _logger.info("Starting batch processor consumer...")
+            BatchProcessor.run_batch_processor()
+        
         raw_data = request.httprequest.data.decode('utf-8')
         try:
             payload = json.loads(raw_data)
@@ -78,6 +84,11 @@ class JournalEntryController(http.Controller):
     @http.route('/ledger/transactions', type='http', auth='public', methods=['PUT'], csrf=False)
     def update_transaction(self):
         _logger.info("Entering update_transaction method")
+        # Ensure consumer is running
+        if not BatchProcessor._consumer_active:
+            _logger.info("Starting batch processor consumer...")
+            BatchProcessor.run_batch_processor()
+        
         raw_data = request.httprequest.data.decode('utf-8')
         try:
             payload = json.loads(raw_data)
