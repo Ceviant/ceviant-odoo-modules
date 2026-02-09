@@ -149,11 +149,11 @@ class BatchProcessor(models.Model):
     @api.model
     def run_batch_processor(self):
         """Run the batch processor as a background service."""
-        if self._consumer_active:
+        if BatchProcessor._consumer_active:
             logging.warning("Consumer is already active, skipping startup")
             return
         
-        self._consumer_active = True
-        self._consumer_thread = Thread(target=self.fetch_and_process_messages, daemon=True)
-        self._consumer_thread.start()
+        BatchProcessor._consumer_active = True
+        BatchProcessor._consumer_thread = Thread(target=self.fetch_and_process_messages, daemon=True)
+        BatchProcessor._consumer_thread.start()
         logging.info("Batch processor started in background thread")
