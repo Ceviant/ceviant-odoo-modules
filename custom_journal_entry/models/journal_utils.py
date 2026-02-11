@@ -451,6 +451,16 @@ def _create_transaction_records(env, journal_id, company_id, transaction_date, t
         if not custom_entry_id:
             _logger.warning("Failed to create custom journal entry. Continuing with account move only.")
 
+        # Post the journal entry to make it official
+        try:
+            transaction_id.action_post()
+            _logger.info(f"Journal entry {transaction_id.id} posted successfully. State: {transaction_id.state}")
+        except Exception as post_error:
+            _logger.error(f"Error posting journal entry {transaction_id.id}: {post_error}")
+            import traceback
+            _logger.error(f"Post error traceback: {traceback.format_exc()}")
+            raise Exception(f"Failed to post journal entry: {str(post_error)}")
+
         return {'status': 'success', 'message': 'Journal entry created successfully'}
     except Exception as e:
         _logger.error(f"Error creating journal entry: {e}")
