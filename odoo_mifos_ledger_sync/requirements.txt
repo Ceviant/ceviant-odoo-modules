@@ -1,0 +1,4 @@
+pika==1.3.2
+odoorpc==0.10.1
+requests==2.25.1
+jsonschema==4.23.0

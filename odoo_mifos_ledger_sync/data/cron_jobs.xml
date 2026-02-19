@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <data>
+        <record id="ir_cron_process_batches" model="ir.cron">
+            <field name="name">Process Batches from RabbitMQ</field>
+            <field name="model_id" ref="custom_journal_entry.model_custom_journal_entry_batch_processor"/> <!--Defines the model where the method to be executed is located. -->
+            <field name="state">code</field> <!-- It will execute a piece of python code -->
+            <field name="code">model.run_batch_processor()</field> <!-- Defines the code to run when job gets executed -->
+            <field name="interval_number">1</field> <!-- It will run daily -->
+            <field name="interval_type">days</field>
+            <field name="numbercall">-1</field>
+            <field name="active">True</field>
+            <field name="nextcall" eval="(DateTime.now().replace(hour=20, minute=0, second=0))"/> <!-- will execute by 8pm daily -->
+        </record>
+    </data>
+</odoo>
