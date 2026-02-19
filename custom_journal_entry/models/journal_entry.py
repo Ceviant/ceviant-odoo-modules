@@ -5,7 +5,7 @@ class CustomJournalEntry(models.Model):
     _name = 'custom.journal.entry'
     _description = 'Custom Journal Entry'
 
-    branch_id = fields.Text(string='Branch ID')
+    branch_id = fields.Char(string='Branch ID')
 
     transaction_date = fields.Date(string='Transaction Date', required=True)
     transaction_reference = fields.Char(string='Transaction Reference', required=True)

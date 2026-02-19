@@ -1,6 +1,6 @@
 from odoo import http
 from odoo.http import request, Response
-from ..models.validation import validate_account_entry
+from ..models.validation import validate_account_entry, get_available_currencies, get_default_currency
 from ..models.account_utils import get_account_records, get_account_data, create_account
 import logging
 import json
@@ -40,10 +40,18 @@ class AccountEntryController(http.Controller):
                 content_type='application/json'
             )
 
+        # Set default currency if not provided
+        if 'currency' not in payload:
+            payload['currency'] = get_default_currency()
+        
         try:
-            batch_ref, error = create_account(payload)
+            result, error = create_account(payload)
             if error:
                 raise ValueError(error)
+            
+            # Extract batch_ref from result dict
+            batch_ref = result.get('batch_ref') if isinstance(result, dict) else result
+            
         except Exception as error:
             _logger.error("Account creation failed: %s", error)
             return Response(
@@ -94,6 +102,39 @@ class AccountEntryController(http.Controller):
                 'code': 200,
                 'status': 'success',
                 'data': account_data
+            }),
+            status=200,
+            content_type='application/json'
+        )
+
+    @http.route('/ledger/account-types', type='http', auth='public', methods=['GET'], csrf=False)
+    def get_supported_account_types(self, **kwargs):
+        _logger.info("Fetching supported account types")
+
+        try:
+            Account = request.env['account.account']
+            # Get all unique account types from existing accounts
+            accounts = Account.sudo().search_read([], fields=['account_type'])
+            valid_account_types = sorted(list(set(record['account_type'] for record in accounts if record['account_type'])))
+            
+            _logger.info(f"Valid account types: {valid_account_types}")
+        except Exception as error:
+            _logger.error("Error fetching account types: %s", error)
+            return Response(
+                json.dumps({
+                    'code': 500,
+                    'status': 'error',
+                    'data': {"message": "Failed to retrieve account types"}
+                }),
+                status=500,
+                content_type='application/json'
+            )
+
+        return Response(
+            json.dumps({
+                'code': 200,
+                'status': 'success',
+                'data': valid_account_types
             }),
             status=200,
             content_type='application/json'

@@ -1,10 +1,13 @@
 {
-    'name': 'custom_journal_entry',
+    'name': 'Custom Journal Entry',
     'version': '2.0.0',
     'category': 'Accounting',
-    'summary': 'For handling ledger transactions',
-    'description': 'This module provides a custom API endpoint for handling ledger transactions.',
+    'summary': 'Advanced journal entry processing with RabbitMQ batch processing and custom accounting validations.',
+    'description': 'This module provides custom journal entry management with built-in support for batch processing via RabbitMQ message queues. It handles transaction processing, account creation, journal entry updates with automatic validation, retry logic, and comprehensive error handling. Features include multi-currency support, double-entry accounting verification, and asynchronous message consumption.',
     'author': 'Ceviant',
+    'license': 'LGPL-3',
+    'website': 'https://www.ceviant.co',
+    'icon': 'https://www.ceviant.co/favicon/apple-touch-icon.png',
     'depends': ['account', 'hr_payroll_community'],
     'data': [
         'security/ir.model.access.csv',
