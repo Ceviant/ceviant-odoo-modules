@@ -13,6 +13,7 @@ class ExpenseReport(models.Model):
             ('draft', 'To Report'),
             ('submit', 'Line Manager Approval'),
             ('approve', 'Internal Control Approval'),
+            ('manager_director', 'Manager Director Approval'),
             ('post', 'Post'),
             ('done', 'Done'),
             ('cancel', 'Cancelled')
@@ -31,7 +32,7 @@ class ExpenseReport(models.Model):
     approval_groups = {
         'submit': 'Line Manager',
         'approve': 'Internal Control',
-
+        'manager_director': 'Manager Director',
     }
 
     def _get_approval_group(self, group_name):
@@ -54,12 +55,21 @@ class ExpenseReport(models.Model):
         for report in self:
             user = self.env.user
             line_manager_group = self._get_approval_group('Line Manager')
+            internal_control_group = self._get_approval_group('Internal Control')
+            manager_director_group = self._get_approval_group('Manager Director')
 
             if report.state == 'submit':
                 if line_manager_group not in user.groups_id:
                     raise UserError(_("You don't have permission to approve at the Line Manager stage."))
                 report.write({'state': 'approve'})
-
+            elif report.state == 'approve':
+                if internal_control_group not in user.groups_id:
+                    raise UserError(_("You don't have permission to approve at the Internal Control stage."))
+                report.write({'state': 'manager_director'})
+            elif report.state == 'manager_director':
+                if manager_director_group not in user.groups_id:
+                    raise UserError(_("You don't have permission to approve at the Manager Director stage."))
+                report.write({'state': 'post'})
             else:
                 raise UserError(_("Approval is not allowed in the current state."))
 
@@ -67,11 +77,11 @@ class ExpenseReport(models.Model):
         """Create account move for the expense report."""
         for report in self:
             user = self.env.user
-            internal_control_group = self._get_approval_group('Internal Control')
+            manager_director_group = self._get_approval_group('Manager Director')
 
-            if report.state == 'approve':
-                if internal_control_group not in user.groups_id:
-                    raise UserError(_("You don't have permission to create account move at the Internal Control stage."))
+            if report.state == 'manager_director':
+                if manager_director_group not in user.groups_id:
+                    raise UserError(_("You don't have permission to create account move at the Manager Director stage."))
             super(ExpenseReport, self).action_sheet_move_create()
 
 
