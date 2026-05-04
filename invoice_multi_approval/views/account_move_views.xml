@@ -22,10 +22,7 @@
                 <button name="action_invoice_approve" class="oe_highlight"
                         string="Approve" type="object"
                         groups="invoice_multi_approval.group_approver,invoice_multi_approval.group_approve_manager,invoice_multi_approval.group_finance_approver,invoice_multi_approval.group_managing_director,invoice_multi_approval.group_journal_line_manager,invoice_multi_approval.group_journal_internal_control,invoice_multi_approval.group_journal_management,invoice_multi_approval.group_journal_treasury"
-                        invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund')
-                                   or check_approve_ability != True
-                                   or document_fully_approved == True
-                                   or is_approved == True"/>
+                    invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') or check_approve_ability != True or document_fully_approved == True or is_approved == True"/>
             </xpath>
 
             <xpath expr="//button[@name='action_post']" position="before">
@@ -36,20 +33,14 @@
             </xpath>
 
             <xpath expr="//button[@name='action_post'][2]" position="attributes">
-                <attribute name="invisible">
-                    (move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and document_fully_approved == False)
-                    or (move_type == 'entry' and state != 'treasury')
-                    or state == 'posted'
-                </attribute>
+                <attribute name="invisible">(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and document_fully_approved == False) or (move_type == 'entry' and state != 'treasury') or state == 'posted'</attribute>
             </xpath>
 
             <xpath expr="//button[@name='action_post']" position="before">
                 <button name="action_refuse" class="oe_highlight"
                         string="Refuse" type="object"
                         groups="invoice_multi_approval.group_approver,invoice_multi_approval.group_approve_manager,invoice_multi_approval.group_finance_approver,invoice_multi_approval.group_managing_director,invoice_multi_approval.group_journal_line_manager,invoice_multi_approval.group_journal_internal_control,invoice_multi_approval.group_journal_management,invoice_multi_approval.group_journal_treasury"
-                        invisible="(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and state not in ['finance_approval', 'md_approval'])
-                            or (move_type == 'entry' and state not in ['line_manager', 'internal_control', 'management', 'treasury'])
-                                   or (move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'entry'))"/>
+                    invisible="(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and state not in ['finance_approval', 'md_approval']) or (move_type == 'entry' and state not in ['line_manager', 'internal_control', 'management', 'treasury']) or (move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'entry'))"/>
             </xpath>
 
             <xpath expr="//field[@name='state']" position="replace">
@@ -60,8 +51,7 @@
 
             <xpath expr="//page[@id='other_tab']" position="after">
                 <page string="Approvals" name="approval_tab"
-                      invisible="move_type not in ('in_invoice','out_invoice', 'in_refund','out_refund')
-                      and page_visibility == False">
+                      invisible="move_type not in ('in_invoice', 'out_invoice', 'in_refund', 'out_refund') and page_visibility == False">
                     <field name="approval_ids" mode="tree" nolabel="1" style="pointer-events:none;">
                         <tree string="Approval lines" create="0" edit="0" delete="0">
                             <field name="approver_id"/>
