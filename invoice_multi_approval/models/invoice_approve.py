@@ -105,9 +105,9 @@ class InvoiceApprove(models.Model):
                 raise UserError(
                     _("You can only post invoices after Treasury confirmation. Current state: %s") % move.state
                 )
-            if move.move_type == 'entry' and move.state not in ['draft', 'md_approval']:
+            if move.move_type == 'entry' and move.state != 'md_approval':
                 raise UserError(
-                    _("You can only post journal entries that are in Draft or Managing Director Approval state. Current state: %s") % move.state
+                    _("You can only post journal entries after Managing Director Approval. Current state: %s") % move.state
                 )
         return super().action_post()
 

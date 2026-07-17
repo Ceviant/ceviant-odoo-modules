@@ -38,7 +38,7 @@
             </xpath>
 
             <xpath expr="//button[@name='action_post'][2]" position="attributes">
-                <attribute name="invisible">(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and state != 'treasury') or (move_type == 'entry' and state not in ['draft', 'md_approval']) or state == 'posted'</attribute>
+                <attribute name="invisible">(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and state != 'treasury') or (move_type == 'entry' and state != 'md_approval') or state == 'posted'</attribute>
             </xpath>
 
             <xpath expr="//button[@name='action_post']" position="before">
