@@ -35,9 +35,7 @@
     'data': [
         'security/invoice_multi_approval_groups.xml',
         'security/ir.model.access.csv',
-        'data/invoice_approval_data.xml',
         'data/account_move_groups.xml',
-        'views/invoice_approval_views.xml',
         'views/account_move_views.xml',
     ],
     'images': ['static/description/banner.png'],

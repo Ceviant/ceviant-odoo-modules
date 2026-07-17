@@ -19,7 +19,4 @@
 #    If not, see <http://www.gnu.org/licenses/>.
 #
 #############################################################################
-from . import account_move
-from . import approval_line
-from . import invoice_approval
 from . import invoice_approve
