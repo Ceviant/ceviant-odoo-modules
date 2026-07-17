@@ -57,18 +57,18 @@ class InvoiceApprove(models.Model):
 
     def action_submit_for_approval(self):
         for move in self:
-            if move.move_type != 'entry':
-                raise UserError(_("Only journal entries can be submitted through this approval workflow."))
+            if move.move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund'):
+                raise UserError(_("Only invoices and bills can be submitted through this approval workflow."))
             if move.state != 'draft':
-                raise UserError(_("Only draft journal entries can be submitted for approval."))
+                raise UserError(_("Only draft invoices can be submitted for approval."))
             if move.message_attachment_count < 1:
-                raise UserError(_("Attach at least one supporting document before submitting the journal entry."))
+                raise UserError(_("Attach at least one supporting document before submitting the invoice."))
             move.write({'state': 'line_manager'})
 
     def action_invoice_approve(self):
         """Move invoices and journal entries through their approval stages."""
         for move in self:
-            if move.move_type == 'entry':
+            if move.move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund'):
                 if move.state == 'line_manager':
                     move._ensure_stage_group('line_manager')
                     move.write({'state': 'internal_control'})
@@ -82,7 +82,7 @@ class InvoiceApprove(models.Model):
                     move._ensure_stage_group('treasury')
                     move.action_post()
                 else:
-                    raise UserError(_("Approval is not allowed in the current journal entry state."))
+                    raise UserError(_("Approval is not allowed in the current invoice state."))
                 continue
 
             if move.state == 'draft':
@@ -95,26 +95,26 @@ class InvoiceApprove(models.Model):
                 move._ensure_stage_group('md_approval')
                 move.action_post()
             else:
-                raise UserError(_("The invoice is already in a final state (Posted or Rejected)."))
+                raise UserError(_("The journal entry is already in a final state (Posted or Rejected)."))
 
     def action_post(self):
         """Allow posting only from the last approval stage for protected moves."""
         for move in self:
             _logger.info("Attempting to post move %s with state: %s", move.name, move.state)
-            if move.move_type == 'entry' and move.state != 'treasury':
+            if move.move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and move.state != 'treasury':
                 raise UserError(
-                    _("You can only post journal entries after Treasury confirmation. Current state: %s") % move.state
+                    _("You can only post invoices after Treasury confirmation. Current state: %s") % move.state
                 )
-            if move.move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and move.state not in ['draft', 'md_approval']:
+            if move.move_type == 'entry' and move.state not in ['draft', 'md_approval']:
                 raise UserError(
-                    _("You can only post invoices that are in Draft or Managing Director Approval state. Current state: %s") % move.state
+                    _("You can only post journal entries that are in Draft or Managing Director Approval state. Current state: %s") % move.state
                 )
         return super().action_post()
 
     def action_refuse(self):
         """Refuse the move and send it back to draft state."""
         for move in self:
-            if move.move_type == 'entry':
+            if move.move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund'):
                 allowed_states = ['line_manager', 'internal_control', 'management', 'treasury']
             else:
                 allowed_states = ['finance_approval', 'md_approval']

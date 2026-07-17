@@ -17,7 +17,7 @@
             <xpath expr="//button[@name='action_post']" position="before">
                 <button name="action_submit_for_approval" class="oe_highlight"
                         string="Submit for Approval" type="object"
-                        invisible="move_type != 'entry' or state != 'draft'"/>
+                        invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') or state != 'draft'"/>
 
                 <button name="action_invoice_approve" class="oe_highlight"
                         string="Approve" type="object"
@@ -29,18 +29,23 @@
                 <button name="action_invoice_approve" class="oe_highlight"
                         string="Approve" type="object"
                         groups="invoice_multi_approval.group_journal_line_manager,invoice_multi_approval.group_journal_internal_control,invoice_multi_approval.group_journal_management,invoice_multi_approval.group_journal_treasury"
-                        invisible="move_type != 'entry' or state not in ['line_manager', 'internal_control', 'management', 'treasury']"/>
+                        invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') or state not in ['line_manager', 'internal_control', 'management', 'treasury']"/>
+
+                <button name="action_invoice_approve" class="oe_highlight"
+                        string="Approve" type="object"
+                        groups="invoice_multi_approval.group_finance_approver,invoice_multi_approval.group_managing_director"
+                        invisible="move_type != 'entry' or state not in ['draft', 'finance_approval', 'md_approval']"/>
             </xpath>
 
             <xpath expr="//button[@name='action_post'][2]" position="attributes">
-                <attribute name="invisible">(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and document_fully_approved == False) or (move_type == 'entry' and state != 'treasury') or state == 'posted'</attribute>
+                <attribute name="invisible">(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and state != 'treasury') or (move_type == 'entry' and state not in ['draft', 'md_approval']) or state == 'posted'</attribute>
             </xpath>
 
             <xpath expr="//button[@name='action_post']" position="before">
                 <button name="action_refuse" class="oe_highlight"
                         string="Refuse" type="object"
                         groups="invoice_multi_approval.group_approver,invoice_multi_approval.group_approve_manager,invoice_multi_approval.group_finance_approver,invoice_multi_approval.group_managing_director,invoice_multi_approval.group_journal_line_manager,invoice_multi_approval.group_journal_internal_control,invoice_multi_approval.group_journal_management,invoice_multi_approval.group_journal_treasury"
-                    invisible="(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and state not in ['finance_approval', 'md_approval']) or (move_type == 'entry' and state not in ['line_manager', 'internal_control', 'management', 'treasury']) or (move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'entry'))"/>
+                    invisible="(move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') and state not in ['line_manager', 'internal_control', 'management', 'treasury']) or (move_type == 'entry' and state not in ['finance_approval', 'md_approval']) or (move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'entry'))"/>
             </xpath>
 
             <xpath expr="//field[@name='state']" position="replace">
