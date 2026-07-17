@@ -37,8 +37,16 @@
 
             <xpath expr="//field[@name='state']" position="replace">
                 <field name="state" widget="statusbar"
-                      statusbar_visible="draft,finance_approval,md_approval,line_manager,internal_control,management,treasury,posted,cancel"
-                       readonly="1"/>
+                      statusbar_visible="draft,finance_approval,md_approval,posted,cancel"
+                       readonly="1"
+                       invisible="move_type != 'entry'"/>
+                <field name="state" widget="statusbar"
+                      statusbar_visible="draft,line_manager,internal_control,management,treasury,posted,cancel"
+                       readonly="1"
+                       invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund')"/>
+                <field name="state" widget="statusbar"
+                       readonly="1"
+                       invisible="move_type == 'entry' or move_type in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund')"/>
             </xpath>
         </field>
     </record>
