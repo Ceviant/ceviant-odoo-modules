@@ -1,8 +1,27 @@
 # Odoo-Mifos Ledger Sync
 
-> A robust, asynchronous ledger synchronization system that seamlessly integrates Mifos financial data with Odoo's accounting module using RabbitMQ message queues.
+> **Current behaviour (2.1.0).** The rest of this document describes the 2.0
+> asynchronous design. In 2.1.0:
+>
+> * `POST /ledger/accounts` and `POST`/`PUT /ledger/transactions` are processed
+>   **synchronously**. A success response means the account or entry is
+>   committed and the entry is **posted**. On any error everything is rolled
+>   back and Fineract resends on its next job run.
+> * Transactions are idempotent on `transactionReference`. A repeat of a posted
+>   entry returns `200`, and a leftover draft is rebuilt and posted.
+> * Dates follow the payload's `dateFormat` (Fineract sends `dd/MM/yyyy`).
+> * Fineract `glAccountId` maps to the Odoo account whose code is that GL id,
+>   in the company set by the `ledger_sync.company_id` parameter (default: main
+>   company).
+> * Synced entries bypass the human approval workflow and are posted with
+>   Odoo's core posting (balance, lock dates and sequences still enforced).
+> * Optional shared secret: set `ledger_sync.api_key` and send
+>   `X-Ledger-Sync-Key`.
+> * The RabbitMQ consumer is off unless `LEDGER_SYNC_RABBITMQ_CONSUMER=1`.
+> * The module no longer depends on `custom_journal_entry`. Uninstall that
+>   duplicate.
 
-**Version:** 2.0.0  
+**Version:** 2.1.0  
 **Category:** Accounting  
 **Author:** Turog
 
