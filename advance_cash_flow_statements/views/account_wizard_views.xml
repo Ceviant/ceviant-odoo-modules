@@ -39,14 +39,8 @@
         <field name="view_mode">form</field>
         <field name="target">new</field>
     </record>
-    <!--        Menuitem-->
-    <menuitem id="menu_financial_reports" sequence="5"
-              name="Financial reports"
-              parent="account.menu_finance_reports"
-              groups="account.group_account_manager"/>
-    <menuitem id="account_bank_book_menu" name="Adv Cash Flow Statement"
-              sequence="3"
-              action="advance_cash_flow_statements.action_account_wizard"
-              parent="advance_cash_flow_statements.menu_financial_reports"
-              groups="account.group_account_manager"/>
+    <!-- Menus retired: the report's SQL joins journal items twice (inflating
+         totals), ignores the company and has no operating / investing /
+         financing split. Use Accounting > Reporting > Statement of Cash Flows
+         from ceviant_cash_flow instead. -->
 </odoo>

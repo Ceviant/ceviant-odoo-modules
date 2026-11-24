@@ -61,14 +61,11 @@
               parent="dynamic_report_accounting"/>
     <menuitem id="menu_bank_book" action="action_bank_book"
               name="Bank Book" sequence="6" parent="dynamic_report_accounting"/>
-    <menuitem id="menu_balance_sheet_report"
-              action="action_dynamic_balance_sheet"
-              name="Balance Sheet" sequence="2"
-              parent="dynamic_report_accounting"/>
-    <menuitem id="menu_profit_and_loss_report"
-              action="action_dynamic_profit_and_loss"
-              name="Profit and Loss" sequence="1"
-              parent="dynamic_report_accounting"/>
+    <!-- The dynamic Balance Sheet / Profit and Loss menus are intentionally
+         not exposed: dynamic.balance.sheet.report only reads the current
+         calendar year's journal items (no opening balances), so its figures
+         are wrong. Use base_accounting_kit's Balance Sheet / Profit and Loss
+         (Accounting > Reporting) instead. -->
     <menuitem id="aged_payable_menu"
               action="action_aged_payable"
               name="Aged Payable" sequence="9"
