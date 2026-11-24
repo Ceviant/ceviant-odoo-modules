@@ -21,6 +21,7 @@
         <record id="account_financial_report_other_income0"
                 model="account.financial.report">
             <field name="name">Other Income</field>
+            <field name="sign" eval="'-1'"/>
             <field name="sequence">10</field>
             <field name="parent_id"
                    ref="account_financial_report_income0"/>
@@ -31,6 +32,7 @@
         <record id="financial_report_gross_profit"
                 model="account.financial.report">
             <field name="name">Gross Profit</field>
+            <field name="sign" eval="'-1'"/>
             <field name="parent_id"
                    ref="account_financial_report_income0"/>
             <field name="display_detail">detail_with_hierarchy</field>
@@ -40,6 +42,7 @@
         <record id="financial_report_cost_of_revenue"
                 model="account.financial.report">
             <field name="name">Cost of Revenue</field>
+            <field name="sign" eval="'-1'"/>
             <field name="sequence">10</field>
             <field name="parent_id"
                    ref="financial_report_gross_profit"/>
@@ -50,6 +53,7 @@
         <record id="account_financial_report_operating_income0"
                 model="account.financial.report">
             <field name="name">Operating Income</field>
+            <field name="sign" eval="'-1'"/>
             <field name="sequence">1</field>
             <field name="parent_id"
                    ref="financial_report_gross_profit"/>
@@ -84,7 +88,8 @@
         </record>
         <record id="account_financial_report_liabilitysum0"
                 model="account.financial.report">
-            <field name="name">Liability</field>
+            <field name="name">Liabilities and Equity</field>
+            <field name="sign" eval="'-1'"/>
             <field name="sequence">1</field>
             <field name="parent_id"
                    ref="account_financial_report_balancesheet0"/>
@@ -93,7 +98,8 @@
         </record>
         <record id="account_financial_report_liability0"
                 model="account.financial.report">
-            <field name="name">Liability</field>
+            <field name="name">Liabilities and Capital</field>
+            <field name="sign" eval="'-1'"/>
             <field name="parent_id"
                    ref="account_financial_report_liabilitysum0"/>
             <field name="display_detail">detail_with_hierarchy</field>
@@ -102,7 +108,8 @@
         </record>
         <record id="account_financial_report_profitloss_toreport0"
                 model="account.financial.report">
-            <field name="name">Profit (Loss) to report</field>
+            <field name="name">Retained Earnings and Current Profit</field>
+            <field name="sign" eval="'-1'"/>
             <field name="parent_id"
                    ref="account_financial_report_liabilitysum0"/>
             <field name="display_detail">no_detail</field>

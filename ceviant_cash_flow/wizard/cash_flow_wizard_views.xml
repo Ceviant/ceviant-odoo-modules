@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_ceviant_cash_flow_wizard_form" model="ir.ui.view">
+        <field name="name">ceviant.cash.flow.wizard.form</field>
+        <field name="model">ceviant.cash.flow.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Statement of Cash Flows">
+                <group>
+                    <group>
+                        <field name="date_from"/>
+                        <field name="date_to"/>
+                    </group>
+                    <group>
+                        <field name="company_id" groups="base.group_multi_company"/>
+                        <field name="target_move" widget="radio"/>
+                        <field name="show_accounts"/>
+                    </group>
+                </group>
+                <footer>
+                    <button name="action_view" string="View" type="object" class="btn-primary"/>
+                    <button name="action_print_pdf" string="Print PDF" type="object"/>
+                    <button name="action_export_xlsx" string="Export XLSX" type="object"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_ceviant_cash_flow_wizard" model="ir.actions.act_window">
+        <field name="name">Statement of Cash Flows</field>
+        <field name="res_model">ceviant.cash.flow.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <menuitem id="menu_ceviant_cash_flow"
+              name="Statement of Cash Flows"
+              action="action_ceviant_cash_flow_wizard"
+              parent="account.menu_finance_reports"
+              groups="account.group_account_readonly"
+              sequence="3"/>
+</odoo>

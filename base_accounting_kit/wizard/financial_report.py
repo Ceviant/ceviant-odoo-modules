@@ -180,6 +180,30 @@ class FinancialReport(models.TransientModel):
                 res[row['id']] = row
         return res
 
+    # Account types for the multi-type sections seeded in
+    # data/account_financial_report_data.xml. Cost of revenue is
+    # deliberately absent from the expense section: it is already reported
+    # under Gross Profit.
+    _SECTION_ACCOUNT_TYPES = {
+        'base_accounting_kit.account_financial_report_expense0': [
+            'expense', 'expense_depreciation'],
+        'base_accounting_kit.account_financial_report_assets0': [
+            'asset_receivable', 'asset_cash', 'asset_current',
+            'asset_non_current', 'asset_prepayments', 'asset_fixed'],
+        'base_accounting_kit.account_financial_report_liability0': [
+            'liability_payable', 'liability_credit_card',
+            'liability_current', 'liability_non_current', 'equity',
+            'equity_unaffected'],
+    }
+
+    def _get_section_account_types(self, report):
+        """Return the account types of a seeded multi-type section, or None."""
+        for xmlid, account_types in self._SECTION_ACCOUNT_TYPES.items():
+            section = self.env.ref(xmlid, raise_if_not_found=False)
+            if section and section.id == report.id:
+                return account_types
+        return None
+
     def _compute_report_balance(self, reports):
         """returns a dictionary with key=the ID of a record and
          value=the credit, debit and balance amount
@@ -208,28 +232,15 @@ class FinancialReport(models.TransientModel):
             elif report.type == 'account_type':
                 # it's the sum the leaf accounts
                 #  with such an account type
+                # The seeded Expense / Assets / Liability sections cover
+                # several account types, which the single-value
+                # account_type_ids selection cannot express. Match them by
+                # xmlid (not by display name, which users can rename).
+                account_types = self._get_section_account_types(report) or [
+                    report.account_type_ids]
                 accounts = self.env['account.account'].search([
-                    ('account_type', '=', report.account_type_ids)
+                    ('account_type', 'in', account_types)
                 ])
-                if report.name == "Expenses":
-                    accounts = self.env['account.account'].search([
-                        ('account_type', 'in', ["expense",
-                                                "expense_depreciation",
-                                                "expense_direct_cost"])
-                    ])
-                if report.name == "Liability":
-                    accounts = self.env['account.account'].search([
-                        ('account_type', 'in',
-                         ["liability_payable", "equity", "liability_current",
-                          "liability_non_current"])
-                    ])
-                if report.name == "Assets":
-                    accounts = self.env['account.account'].search([
-                        ('account_type', 'in',
-                         ["asset_receivable", "asset_cash", "asset_current",
-                          "asset_non_current", "asset_prepayments",
-                          "asset_fixed"])
-                    ])
                 res[report.id]['account'] = self._compute_account_balance(
                     accounts)
                 for value in res[report.id]['account'].values():

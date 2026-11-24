@@ -49,9 +49,8 @@
         <field name="context"
                eval="{'default_account_report_id':ref('base_accounting_kit.account_financial_report_cash_flow0')}"/>
     </record>
-    <menuitem id="menu_account_cash_flow_report"
-              name="Cash Flow Statement"
-              sequence="5"
-              action="action_cash_flow_report"
-              parent="base_accounting_kit.account_reports_generic_statements"/>
+    <!-- Menu retired: this report sums debits/credits of tagged accounts,
+         which does not produce a valid cash flow statement (signs invert and
+         non-cash entries are counted). Use Accounting > Reporting >
+         Statement of Cash Flows from ceviant_cash_flow instead. -->
 </odoo>

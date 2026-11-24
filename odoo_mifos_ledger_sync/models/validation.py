@@ -1,8 +1,6 @@
 import jsonschema
 from jsonschema import validate
-import odoorpc
 import logging
-from odoo.http import request
 
 _logger = logging.getLogger(__name__)
 
@@ -51,6 +49,7 @@ account_entry_schema = {
         "account_type": {"type": "string"},
         "currency": {"type": "string"},
         "status": {"type": "string"},
+        "account_status": {"type": "string"},
         "account_code": {"type": "string"}
     },
     "required": ["account_id", "account_code", "account_name", "account_type"]
@@ -75,103 +74,39 @@ def validate_account_entry(payload):
         return False, str(err)
 
 
-def validate_account_ids(env, account_ids):
-    """Validate and map account IDs to Odoo account IDs.
-    
-    The glAccountId values from journal entry are actually account codes (425, 680, etc).
-    This function queries custom_account_entry by account_code, retrieves the account_id values,
-    and maps them to Odoo account IDs.
-    Returns a mapping of {glAccountId: odoo_account_id} for accounts that could be found.
+def validate_account_ids(env, gl_account_ids, company):
+    """Map Fineract GL account ids to Odoo account ids within ``company``.
+
+    Fineract's PostAccountsToOdoo job registers each GL account with
+    account_code = str(GL id), so a transaction's glAccountId is looked up by
+    that code. Only accounts registered through the sync (present in
+    custom.account.entry) are accepted, so a Fineract id can never land on an
+    unrelated chart account that happens to share the code.
+
+    Returns {str(glAccountId): odoo_account_id} for the ids that resolve.
     """
-    if not account_ids:
-        _logger.warning("No account IDs provided for validation")
+    codes = sorted({str(g) for g in gl_account_ids if g is not None})
+    if not codes:
         return {}
-    
-    try:
-        # glAccountId values are account codes, convert to strings
-        account_code_list = [str(id) for id in account_ids if id is not None]
-        _logger.info(f"Validating account codes (glAccountId): {account_code_list}")
-    except (ValueError, TypeError) as e:
-        _logger.error(f"Error converting account codes to strings: {e}")
-        return {}
-    
-    id_mapping = {}
-    
-    # Query custom_account_entry for the provided account codes
-    try:
-        env.cr.execute("""
-            SELECT account_id, account_code FROM public.custom_account_entry 
-            WHERE account_code IN %s
-        """, (tuple(account_code_list),))
-        custom_accounts = env.cr.fetchall()
-        _logger.info(f"Found {len(custom_accounts)} custom account entries for codes {account_code_list}")
-        
-        # Build a mapping of account_code to account_code (for reference)
-        custom_account_map = {row[1]: row[1] for row in custom_accounts}
-        _logger.debug(f"Custom account mapping (code -> code): {custom_account_map}")
-    except Exception as e:
-        _logger.error(f"Error querying custom_account_entry: {e}")
-        custom_account_map = {}
-    
-    # Validate provided account codes and map to Odoo accounts
-    for original_id in account_ids:
-        code_str = str(original_id)
-        
-        # Check if account_code exists in custom_account_entry
-        if code_str in custom_account_map:
-            _logger.info(f"Found custom account entry for account_code {code_str}")
-            
-            # Find the corresponding Odoo account by code
-            try:
-                odoo_account = env['account.account'].sudo().search([
-                    ('code', '=', code_str)
-                ], limit=1)
-                if odoo_account:
-                    id_mapping[code_str] = odoo_account.id
-                    _logger.info(f"Mapped glAccountId {code_str} to Odoo account {odoo_account.id}")
-                else:
-                    _logger.warning(f"Account code {code_str} found in custom_account_entry, but no Odoo account found")
-            except Exception as e:
-                _logger.error(f"Error searching for Odoo account with code {code_str}: {str(e)}")
-        else:
-            _logger.warning(f"Account code {code_str} not found in custom_account_entry")
-    
-    unmapped = [str(aid) for aid in account_ids if str(aid) not in id_mapping]
-    if unmapped:
-        _logger.error(f"Account validation failed for glAccountIds: {unmapped}")
-    
-    _logger.info(f"Account validation complete. Mapped {len(id_mapping)} of {len(account_ids)} accounts")
-    return id_mapping
+    registered = set(env['custom.account.entry'].sudo().search(
+        [('account_code', 'in', codes)]).mapped('account_code'))
+    accounts = env['account.account'].sudo().search([
+        ('company_id', '=', company.id),
+        ('code', 'in', [c for c in codes if c in registered]),
+        ('deprecated', '=', False),
+    ])
+    return {a.code: a.id for a in accounts}
 
 
 def get_currency_id(env, currency_code):
-    """Get the currency ID from the currency code."""
-    try:
-        # Get all currencies and find the one with matching code
-        currencies = env['res.currency'].sudo().search([])
-        for currency in currencies:
-            if currency.code == currency_code:
-                _logger.info(f"Found currency {currency_code} with ID {currency.id}")
-                return currency.id
-        _logger.warning(f"Currency {currency_code} not found")
+    """Return the id of the active currency with ISO code ``currency_code``."""
+    if not currency_code:
         return None
-    except Exception as e:
-        _logger.error(f"Error looking up currency {currency_code}: {e}")
-        return None
+    currency = env['res.currency'].sudo().search([('name', '=', currency_code.upper())], limit=1)
+    return currency.id or None
 
 
-def get_default_currency():
-    """Get Odoo's default/base currency from the company."""
-    env = request.env
-    company = env['res.company'].sudo().search([], limit=1)
-    if company and company.currency_id:
-        return company.currency_id.code
-    # Fallback to NGN if no company currency found
-    return 'NGN'
-
-
-def get_available_currencies():
-    """Get list of all available currencies in the system."""
-    env = request.env
-    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'code', 'symbol'])
-    return [{'id': curr['id'], 'code': curr['code'], 'symbol': curr['symbol']} for curr in currencies]
+def get_available_currencies(env):
+    """List the active currencies."""
+    currencies = env['res.currency'].sudo().search_read([], fields=['id', 'name', 'symbol'])
+    return [{'id': c['id'], 'code': c['name'], 'symbol': c['symbol']} for c in currencies]
