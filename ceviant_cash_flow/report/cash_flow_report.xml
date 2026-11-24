@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_report_cash_flow_pdf" model="ir.actions.report">
+        <field name="name">Statement of Cash Flows</field>
+        <field name="model">ceviant.cash.flow.wizard</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">ceviant_cash_flow.report_cash_flow</field>
+        <field name="report_file">ceviant_cash_flow.report_cash_flow</field>
+        <field name="print_report_name">'Statement of Cash Flows %s to %s' % (object.date_from, object.date_to)</field>
+        <field name="binding_type">report</field>
+    </record>
+
+    <record id="action_report_cash_flow_html" model="ir.actions.report">
+        <field name="name">Statement of Cash Flows</field>
+        <field name="model">ceviant.cash.flow.wizard</field>
+        <field name="report_type">qweb-html</field>
+        <field name="report_name">ceviant_cash_flow.report_cash_flow</field>
+        <field name="report_file">ceviant_cash_flow.report_cash_flow</field>
+    </record>
+
+    <record id="action_report_cash_flow_xlsx" model="ir.actions.report">
+        <field name="name">Statement of Cash Flows (XLSX)</field>
+        <field name="model">ceviant.cash.flow.wizard</field>
+        <field name="report_type">xlsx</field>
+        <field name="report_name">ceviant_cash_flow.report_cash_flow_xlsx</field>
+        <field name="report_file">Statement of Cash Flows</field>
+    </record>
+
+    <template id="report_cash_flow">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="wizard">
+                <t t-set="st" t-value="statements[wizard.id]"/>
+                <t t-set="currency" t-value="st['currency']"/>
+                <t t-call="web.external_layout">
+                    <t t-set="company" t-value="st['company']"/>
+                    <div class="page">
+                        <h3>Statement of Cash Flows</h3>
+                        <p>
+                            <span t-esc="st['company'].name"/> &#8212;
+                            for the period <span t-esc="st['date_from']" t-options="{'widget': 'date'}"/>
+                            to <span t-esc="st['date_to']" t-options="{'widget': 'date'}"/>
+                            (<span t-esc="currency.name"/>)
+                            <t t-if="st['include_draft']"><strong> &#8212; includes draft entries</strong></t>
+                        </p>
+                        <table class="table table-sm o_main_table">
+                            <thead>
+                                <tr><th>Description</th><th class="text-end">Amount</th></tr>
+                            </thead>
+                            <tbody>
+                                <t t-foreach="st['sections']" t-as="section">
+                                    <tr><td colspan="2"><strong t-esc="section['label']"/></td></tr>
+                                    <t t-foreach="section['lines']" t-as="line">
+                                        <tr>
+                                            <td style="padding-left: 1.5em;" t-esc="line['label']"/>
+                                            <td class="text-end" t-esc="line['amount']"
+                                                t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+                                        </tr>
+                                        <t t-if="wizard.show_accounts">
+                                            <tr t-foreach="line['details']" t-as="item" class="text-muted">
+                                                <td style="padding-left: 3em;"><small t-esc="item['label']"/></td>
+                                                <td class="text-end"><small t-esc="item['amount']"
+                                                    t-options="{'widget': 'monetary', 'display_currency': currency}"/></td>
+                                            </tr>
+                                        </t>
+                                    </t>
+                                    <tr class="border-top">
+                                        <td><strong t-esc="section['total_label']"/></td>
+                                        <td class="text-end"><strong t-esc="section['total']"
+                                            t-options="{'widget': 'monetary', 'display_currency': currency}"/></td>
+                                    </tr>
+                                </t>
+                                <tr class="border-top border-dark">
+                                    <td><strong>Net increase / (decrease) in cash and cash equivalents</strong></td>
+                                    <td class="text-end"><strong t-esc="st['net_change']"
+                                        t-options="{'widget': 'monetary', 'display_currency': currency}"/></td>
+                                </tr>
+                                <tr>
+                                    <td>Cash and cash equivalents at the beginning of the period</td>
+                                    <td class="text-end" t-esc="st['opening_cash']"
+                                        t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+                                </tr>
+                                <tr class="border-top border-dark">
+                                    <td><strong>Cash and cash equivalents at the end of the period</strong></td>
+                                    <td class="text-end"><strong t-esc="st['closing_cash']"
+                                        t-options="{'widget': 'monetary', 'display_currency': currency}"/></td>
+                                </tr>
+                                <t t-if="wizard.show_accounts">
+                                    <tr><td colspan="2" class="pt-3"><strong>Bank and cash movement by account</strong></td></tr>
+                                    <tr t-foreach="st['cash_accounts']" t-as="item" class="text-muted">
+                                        <td style="padding-left: 1.5em;"><small t-esc="item['label']"/></td>
+                                        <td class="text-end"><small t-esc="item['amount']"
+                                            t-options="{'widget': 'monetary', 'display_currency': currency}"/></td>
+                                    </tr>
+                                </t>
+                            </tbody>
+                        </table>
+                        <div t-if="not currency.is_zero(st['difference'])" class="alert alert-warning">
+                            <strong>Unreconciled difference: </strong>
+                            <span t-esc="st['difference']" t-options="{'widget': 'monetary', 'display_currency': currency}"/>.
+                            The net cash flow does not match the movement of Bank and Cash accounts. Check the account
+                            types of the accounts below.
+                            <ul>
+                                <li t-foreach="st['unclassified']" t-as="item">
+                                    <span t-esc="item['label']"/>:
+                                    <span t-esc="item['amount']" t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+                                </li>
+                            </ul>
+                        </div>
+                        <p class="text-muted small">
+                            Indirect method (IAS 7). Lines are derived from the movement of accounts by account type;
+                            Bank and Cash accounts make up cash and cash equivalents.
+                        </p>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+</odoo>
